@@ -123,6 +123,8 @@ function render(){
  const views={script:renderScript,story:renderStory,characters:()=>renderCharacters(id),props:renderProps};$('#content').innerHTML=(views[tab]||renderScript)();
  $('#search')?.addEventListener('input',e=>{const q=e.target.value.toLocaleLowerCase('uk');document.querySelectorAll('.character-card').forEach(c=>c.hidden=!c.dataset.search.includes(q));$('#no-results').hidden=[...document.querySelectorAll('.character-card')].some(c=>!c.hidden);});
  if(editor&&tab==='script')bindScriptEditor();
+ const download=$('#download-scenario');
+ if(download)download.onclick=()=>downloadScenario(download);
  const scenarios=$('#scenario-select');
  if(scenarios)scenarios.onchange=()=>{if(!switchScenario(scenarios.value))scenarios.value=scenarioId;};
  const picker=$('#character-select');if(picker){tintCharacterSelect(picker);picker.addEventListener('change',e=>location.hash=`characters/${e.target.value}`);}

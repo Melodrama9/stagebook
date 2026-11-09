@@ -117,3 +117,11 @@ test('renaming either scenario changes only its title and preserves the active d
  assert.match(a.run('renderScript()'),/Дует &lt;2&gt;/);
  assert.doesNotMatch(a.run('renderScript()'),/rename-scenario/);
 });
+
+test('PDF button exports the selected scenario when clicked',async()=>{
+ const a=app();
+ a.run('state.scenarios=[{id:"duet",title:"Дует",script:[{type:"heading",text:"Сцена"}]}];location.hash="#script";switchScenario("duet");pdfAssets=Promise.resolve();let exported;window.pdfMake={createPdf:doc=>({download:name=>{exported={doc,name}}})}');
+ await a.nodes.get('#download-scenario').onclick();
+ assert.equal(a.run('exported.name'),'Дует.pdf');
+ assert.equal(a.run('exported.doc.content[1].text'),'Сцена');
+});
