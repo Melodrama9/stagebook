@@ -23,6 +23,14 @@ jobs:
           node-version: 22
       - run: npm test
       - run: npm run build
+      - name: Bundle PDF renderer and embedded fonts
+        working-directory: dist
+        run: |
+          for file in pdfmake.min.js vfs_fonts.js; do
+            curl --fail --location --retry 3 "https://cdn.jsdelivr.net/npm/pdfmake@0.2.20/build/$file" -o "$file"
+          done
+          echo 'c2fd3a5e24db096c9139bb7d266765de433b0b866d03ba356c2ef4d9ae1a53b7  pdfmake.min.js' | sha256sum -c -
+          echo 'f91db5690400fc851536c3a9322f822619f8e9f681abe42013e572d88d3c1f38  vfs_fonts.js' | sha256sum -c -
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

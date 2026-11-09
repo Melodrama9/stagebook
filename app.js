@@ -195,10 +195,41 @@ function bindScriptEditor(){
  };
 }
 
+let pdfAssets;
+function loadPdfAsset(file) {
+ return new Promise((resolve,reject)=>{
+  const script=document.createElement('script');
+  script.src=file;
+  script.onload=resolve;
+  script.onerror=()=>{script.remove();reject(new Error('Не вдалося завантажити PDF-модуль. Спробуйте ще раз.'));};
+  document.head.append(script);
+ });
+}
+
+async function downloadScenario(button) {
+ button.disabled=true;
+ try {
+  const title=scenarioTitle(state,scenarioId);
+  const lines=editor&&scriptDirty?parseScript(scriptDraft):scenarioDocument(state).script||[];
+  const content=[{text:title,fontSize:20,bold:true,margin:[0,0,0,16]}];
+  for(const line of lines){
+   if(line.type==='dialogue'){
+    const speaker=state.characters.find(c=>c.id===line.characterId);
+    if(speaker)content.push({text:speaker.name,bold:true,color:characterColor(speaker),headlineLevel:1});
+   }
+   content.push({text:line.text,bold:line.type==='heading',italics:line.type==='direction',margin:[0,2,0,9]});
+  }
+  if(!pdfAssets)pdfAssets=loadPdfAsset('pdfmake.min.js').then(()=>loadPdfAsset('vfs_fonts.js')).catch(e=>{pdfAssets=null;throw e;});
+  await pdfAssets;
+  window.pdfMake.createPdf({info:{title},content,pageSize:'A4',pageBreakBefore:(node,following)=>node.headlineLevel===1&&!following.length}).download(title.replace(/[\\/:*?"<>|]/g,'_')+'.pdf');
+ }catch(e){notify(e.message);}
+ finally{button.disabled=false;}
+}
+
 function renderScript(){
  const options=(state.scenarios||[]).map(item=>`<option value="${esc(item.id)}" ${item.id===scenarioId?'selected':''}>${esc(item.title)}</option>`).join('');
  const controls=editor?action('rename-scenario','Перейменувати',scenarioId)+action('new-scenario','+ Новий сценарій',''):'';
- const toolbar=`<div class="scenario-toolbar"><label for="scenario-select">Обрати сценарій</label><select id="scenario-select"><option value="">${esc(scenarioTitle(state,''))}</option>${options}</select>${controls}</div>`;
+ const toolbar=`<div class="scenario-toolbar"><label for="scenario-select">Обрати сценарій</label><select id="scenario-select"><option value="">${esc(scenarioTitle(state,''))}</option>${options}</select>${controls}<button class="quiet" id="download-scenario">Завантажити PDF</button></div>`;
  return toolbar+(editor?renderScriptEditor():renderScriptReader());
 }
 function renderScriptReader(){
