@@ -13,7 +13,7 @@ A Ukrainian rehearsal workspace for 36 characters, hosted as a static website on
 
 ## Current setup
 
-The site is connected to Supabase project `pnglmawhqzrhmdszpdxr`. The database migration is applied and contains 36 blank characters. Live API checks confirmed public reads work and anonymous saves, direct updates, and editor-membership reads are denied. The editor account still needs to be created and assigned; GitHub Pages deployment is pending repository access.
+The site is connected to Supabase project `pnglmawhqzrhmdszpdxr`. The database migration is applied and contains 36 blank characters. Live API checks confirmed public reads work and anonymous saves, direct updates, and editor-membership reads are denied. One confirmed account is assigned as the sole editor. Database checks verified editor saves and stale-write rejection inside a rolled-back transaction. GitHub Pages is configured to deploy from Actions at https://melodrama9.github.io/stagebook/. Sign in with the editor email and the password chosen in Supabase. Full password sign-in should be checked by the account owner; no password was shared with the development agent.
 
 The security advisor flags `save_play` as an authenticated SECURITY DEFINER function. This is intentional: the function checks the caller against the sole editor membership before any write, uses an empty search path, and enforces optimistic concurrency. See [Supabase’s advisor explanation](https://supabase.com/docs/guides/database/database-linter?lint=0029_authenticated_security_definer_function_executable).
 
