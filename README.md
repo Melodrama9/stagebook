@@ -11,7 +11,13 @@ A Ukrainian rehearsal workspace for 36 characters, hosted as a static website on
 - Server-enforced single editor, atomic updates, and optimistic concurrency protection. Credentials stay in memory; reloading requires logging in again. Guests see current content on page load/refresh.
 - Without Supabase configuration, a clearly marked, read-only demonstration appears. Demonstration stories are illustrative; the real database starts with 36 blank character profiles and no story points or props.
 
-## Activate login and storage
+## Current setup
+
+The site is connected to Supabase project `pnglmawhqzrhmdszpdxr`. The database migration is applied and contains 36 blank characters. Live API checks confirmed public reads work and anonymous saves, direct updates, and editor-membership reads are denied. The editor account still needs to be created and assigned; GitHub Pages deployment is pending repository access.
+
+The security advisor flags `save_play` as an authenticated SECURITY DEFINER function. This is intentional: the function checks the caller against the sole editor membership before any write, uses an empty search path, and enforces optimistic concurrency. See [Supabase’s advisor explanation](https://supabase.com/docs/guides/database/database-linter?lint=0029_authenticated_security_definer_function_executable).
+
+## Activate login and storage (or configure another project)
 
 1. Create a Supabase project at https://supabase.com/dashboard.
 2. Run `supabase/setup.sql` in its SQL editor.
