@@ -64,7 +64,7 @@ test('script saves independently of focal points and retains speaker assignments
  const a=app();a.run('editor=true;api=async()=>1;delete state.script');
  await a.run('saveScriptLine(null,null,{type:"dialogue",characterId:"c2",text:"Вітаю!"})');
  assert.equal(a.run('state.script[0].characterId'),'c2');assert.equal(a.run('state.points.length'),6);
- assert.match(a.run('state.characters[1].color'),/^#[a-f0-9]{6}$/);
+ assert.match(a.run('characterColor(state.characters[1])'),/^#[a-f0-9]{6}$/);
  await a.run('saveScriptLine(null,state.script[0].id,{type:"direction",text:"Пауза."})');
  assert.equal(a.run('state.script[1].characterId'),null);
  await a.run('saveScriptLine(state.script[0].id,null,{type:"dialogue",characterId:"c3",text:"Інша репліка"})');
@@ -86,4 +86,19 @@ test('existing multiline script round-trips through whole-text editing',()=>{
  const a=app();a.run('state.script=[{id:"s1",type:"dialogue",characterId:"c2",text:"Перша\\nДруга"},{id:"s2",type:"direction",characterId:null,text:"Рух\\nПауза"}]');
  const lines=a.run('parseScript(scriptToText(state.script))');
  assert.equal(lines[0].text,'Перша\nДруга');assert.equal(lines[0].characterId,'c2');assert.equal(lines[1].text,'Рух\nПауза');
+});
+
+test('mini-story creation and editing preserve the original script and actor profiles',async()=>{
+ const a=app();
+ a.run('editor=true;api=async()=>revision+1;state.script=[{id:"old",type:"heading",text:"Original"}];const original=JSON.stringify(state.script), profiles=JSON.stringify(state.characters)');
+ await a.run('createScenario("Дует")');
+ a.run('const duet=scenarioId');
+ assert.equal(a.run('scenarioDocument(state).script.length'),0);
+ await a.run('mutate(s=>{scenarioDocument(s).script=parseScript("- Персонаж 02 [2]: Hello")})');
+ await a.run('createScenario("Фінал")');
+ assert.equal(a.run('scenarioDocument(state).script.length'),0);
+ a.run('switchScenario(duet);editor=false');
+ assert.match(a.run('renderScript()'),/Hello/);
+ assert.doesNotMatch(a.run('renderScript()'),/data-action=/);
+ assert.equal(a.run('JSON.stringify(state.script)===original && JSON.stringify(state.characters)===profiles'),true);
 });

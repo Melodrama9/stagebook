@@ -5,6 +5,35 @@ const portrait = '<svg viewBox="0 0 80 80" fill="none" aria-hidden="true"><circl
 const config = window.STAGE_CONFIG || {};
 const connected = Boolean(config.supabaseUrl && config.supabaseAnonKey);
 let scriptDraft=null, scriptDirty=false;
+let scenarioId='';
+
+// The original script stays in its existing field. Each mini-story owns a separate script.
+function scenarioDocument(play) {
+ if (!scenarioId) return play;
+ const scenario=play.scenarios?.find(item=>item.id===scenarioId);
+ if (!scenario) throw new Error('Сценарій не знайдено.');
+ return scenario;
+}
+
+function switchScenario(id) {
+ if (saving || (scriptDirty && !window.confirm('Відкинути незбережені зміни цього сценарію?'))) return false;
+ scenarioId=id;
+ scriptDraft=null;
+ scriptDirty=false;
+ render();
+ return true;
+}
+
+async function createScenario(title) {
+ title=title.trim();
+ if (!title) throw new Error('Вкажіть назву сценарію.');
+ const id=uid();
+ await mutate(play=>{
+  (play.scenarios??=[]).push({id,title,script:[]});
+ });
+ // Keep the current draft open when creating a scenario from an unsaved script.
+ if (!scriptDirty) switchScenario(id);
+}
 let session = null, editor = false, state, revision = 0, saving = false, submitting = false, timer;
 const initial = {
   points: [
@@ -62,7 +91,7 @@ async function load(){
 }
 async function mutate(change){
  if(!editor||saving)throw new Error('Увійдіть як редактор, щоб зберегти зміни.');
- const next=structuredClone(state);next.characters.forEach(c=>{c.color=characterColor(c);});change(next);saving=true;
+ const next=structuredClone(state);change(next);saving=true;
  try{const result=await api('/rest/v1/rpc/save_play',{method:'POST',body:JSON.stringify({expected_revision:revision,new_data:next})});state=next;revision=result;render();notify('Зміни збережено для всіх учасників');}finally{saving=false;}
 }
 const avatar=c=>`<div class="avatar">${c.photo?`<img src="${esc(c.photo)}" alt="${esc(c.name)}" loading="lazy">`:portrait}</div>`;
@@ -79,6 +108,8 @@ function render(){
  const views={script:renderScript,story:renderStory,characters:()=>renderCharacters(id),props:renderProps};$('#content').innerHTML=(views[tab]||renderScript)();
  $('#search')?.addEventListener('input',e=>{const q=e.target.value.toLocaleLowerCase('uk');document.querySelectorAll('.character-card').forEach(c=>c.hidden=!c.dataset.search.includes(q));$('#no-results').hidden=[...document.querySelectorAll('.character-card')].some(c=>!c.hidden);});
  if(editor&&tab==='script')bindScriptEditor();
+ const scenarios=$('#scenario-select');
+ if(scenarios)scenarios.onchange=()=>{if(!switchScenario(scenarios.value))scenarios.value=scenarioId;};
  const picker=$('#character-select');if(picker){tintCharacterSelect(picker);picker.addEventListener('change',e=>location.hash=`characters/${e.target.value}`);}
 }
 
@@ -129,7 +160,7 @@ function parseScript(text,strict=true){
 }
 function scriptPreview(lines){return lines.map(l=>{const c=state.characters.find(c=>c.id===l.characterId);return `<div class="script-entry ${l.type}" style="--speaker-color:${c?characterColor(c):'#66665f'}">${c?`<h3>${esc(c.name)}</h3>`:''}<div class="script-text">${esc(l.text)}</div></div>`;}).join('');}
 function renderScriptEditor(){
- if(scriptDraft===null)scriptDraft=scriptToText(state.script||[]);
+ if(scriptDraft===null)scriptDraft=scriptToText(scenarioDocument(state).script||[]);
  return `<div class="section-head"><div><h2>Сценарій</h2><p class="subtext"><b>-</b> на початку рядка — репліка · <b>(</b> — дія · звичайний текст — заголовок</p></div><button class="primary" id="save-script-text">Зберегти сценарій</button></div><p id="script-save-status" role="status">${scriptDirty?'Є незбережені зміни':'Усі зміни збережено'}</p><div class="script-editor-wrap"><label class="tiny-heading" for="script-editor">ТЕКСТ СЦЕНАРІЮ</label><textarea id="script-editor" spellcheck="true" placeholder="Сцена перша\n\n(Світло повільно згасає)\n\n-" aria-describedby="script-help">${esc(scriptDraft)}</textarea><div id="script-character-menu" hidden><label for="script-character-choice">Хто говорить?</label><select id="script-character-choice" size="7" aria-label="Персонаж для репліки">${state.characters.map(c=>`<option value="${esc(c.id)}" style="color:${characterColor(c)}">${esc(speakerLabel(c))}${c.actor?' · '+esc(c.actor):''}</option>`).join('')}</select><button class="primary" id="choose-script-character">Обрати персонажа</button></div></div><p class="subtext" id="script-help">Enter — новий рядок. Два пробіли на початку — продовження попередньої репліки. Ctrl / ⌘ + Enter — зберегти.</p><p class="tiny-heading preview-label">ПОПЕРЕДНІЙ ПЕРЕГЛЯД</p><div id="script-live-preview" class="script-page">${scriptPreview(parseScript(scriptDraft,false))}</div>`;
 }
 function bindScriptEditor(){
@@ -143,15 +174,19 @@ function bindScriptEditor(){
  input.addEventListener('keydown',e=>{if(e.key==='ArrowDown'&&!menu.hidden){e.preventDefault();choice.focus();}if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){e.preventDefault();$('#save-script-text').click();}if(e.key==='Escape')menu.hidden=true;});
  $('#save-script-text').onclick=async()=>{
  const button=$('#save-script-text');button.disabled=true;input.readOnly=true;menu.hidden=true;
- try{const lines=parseScript(input.value);await mutate(s=>{s.script=lines;});scriptDirty=false;scriptDraft=null;render();}
- catch(e){$('#script-save-status').textContent=e.message;}
+ try{const lines=parseScript(input.value);await mutate(s=>{scenarioDocument(s).script=lines;});scriptDirty=false;scriptDraft=null;render();}
+ catch(e){const status=$('#script-save-status');if(status)status.textContent=e.message;else notify(e.message);}
  finally{button.disabled=false;input.readOnly=false;}
  };
 }
 
 function renderScript(){
- if(editor)return renderScriptEditor();
- const lines=state.script||[];
+ const options=(state.scenarios||[]).map(item=>`<option value="${esc(item.id)}" ${item.id===scenarioId?'selected':''}>${esc(item.title)}</option>`).join('');
+ const toolbar=`<div class="scenario-toolbar"><label for="scenario-select">Обрати сценарій</label><select id="scenario-select"><option value="">Основний сценарій</option>${options}</select>${editor?action('new-scenario','+ Новий сценарій',''):''}</div>`;
+ return toolbar+(editor?renderScriptEditor():renderScriptReader());
+}
+function renderScriptReader(){
+ const lines=scenarioDocument(state).script||[];
  return `<div class="section-head"><div><h2>Сценарій</h2><p class="subtext">Повний текст вистави: репліки, ремарки та сцени.</p></div>${editor?action('add-script','+ Додати текст','','primary'):''}</div><div class="script-page">${lines.map((line,i)=>{
  const c=state.characters.find(c=>c.id===line.characterId);
  const color=line.type==='dialogue'&&c?characterColor(c):'#55564f';
@@ -193,6 +228,7 @@ $('#login').onclick=async()=>{
 $('#content').addEventListener('click',e=>{
  const link=e.target.closest('[data-scroll]');if(link){e.preventDefault();document.getElementById(link.dataset.scroll)?.scrollIntoView({behavior:'smooth'});return;}
  const b=e.target.closest('[data-action]');if(!b||!editor)return;const {action:a,id}=b.dataset,p=state.points.find(p=>p.id===id),c=state.characters.find(c=>c.id===id),prop=state.props.find(p=>p.id===id);
+ if(a==='new-scenario')modal('Новий сценарій',field('Назва сценарію','title'),data=>createScenario(data.title),'Створити');
  if(['add-script','edit-script','insert-script'].includes(a)){
  const line=a==='edit-script'?(state.script||[]).find(l=>l.id===id):null;
  modal(line?'Редагувати текст':'Додати до сценарію',scriptForm(line),d=>saveScriptLine(line?.id,a==='insert-script'?id:null,d));
