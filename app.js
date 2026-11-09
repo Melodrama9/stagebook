@@ -4,6 +4,7 @@ const uid = () => crypto.randomUUID();
 const portrait = '<svg viewBox="0 0 80 80" fill="none" aria-hidden="true"><circle cx="40" cy="27" r="13" stroke="currentColor" stroke-width="1.5"/><path d="M14 69c0-18 11-27 26-27s26 9 26 27" stroke="currentColor" stroke-width="1.5"/></svg>';
 const config = window.STAGE_CONFIG || {};
 const connected = Boolean(config.supabaseUrl && config.supabaseAnonKey);
+let scriptDraft=null, scriptDirty=false;
 let session = null, editor = false, state, revision = 0, saving = false, submitting = false, timer;
 const initial = {
   points: [
@@ -77,6 +78,7 @@ function render(){
  $('#footer-status').textContent=connected?`Спільна версія · ${revision}`:'Демонстраційний простір';
  const views={script:renderScript,story:renderStory,characters:()=>renderCharacters(id),props:renderProps};$('#content').innerHTML=(views[tab]||renderScript)();
  $('#search')?.addEventListener('input',e=>{const q=e.target.value.toLocaleLowerCase('uk');document.querySelectorAll('.character-card').forEach(c=>c.hidden=!c.dataset.search.includes(q));$('#no-results').hidden=[...document.querySelectorAll('.character-card')].some(c=>!c.hidden);});
+ if(editor&&tab==='script')bindScriptEditor();
  const picker=$('#character-select');if(picker){tintCharacterSelect(picker);picker.addEventListener('change',e=>location.hash=`characters/${e.target.value}`);}
 }
 
@@ -99,7 +101,56 @@ function tintCharacterSelect(select){
  select.style.color=characterColor(c);
  select.style.borderLeft=`6px solid ${characterColor(c)}`;
 }
+
+function speakerLabel(c){return `${c.name} [${state.characters.findIndex(x=>x.id===c.id)+1}]`;}
+function scriptToText(lines){
+ return lines.map(l=>{
+ const c=state.characters.find(c=>c.id===l.characterId);
+ const text=l.text.replace(/\n/g,'\n  ');
+ return l.type==='dialogue'?`- ${speakerLabel(c)}: ${text}`:l.type==='direction'?`(${text})`:text;
+ }).join('\n\n');
+}
+function parseScript(text,strict=true){
+ const result=[];
+ for(const [i,raw] of text.split('\n').entries()){
+ if(!raw.trim())continue;
+ if(raw.startsWith('  ')&&result.length){result[result.length-1].text+='\n'+raw.slice(2);continue;}
+ const line=raw.trim();
+ if(line.startsWith('-')){
+ const c=state.characters.find(c=>line.startsWith(`- ${speakerLabel(c)}:`));
+ if(!c){if(strict)throw new Error(`Рядок ${i+1}: оберіть персонажа для репліки.`);result.push({id:uid(),type:'direction',text:line,characterId:null});continue;}
+ const speech=line.slice(`- ${speakerLabel(c)}:`.length).trimStart();
+ if(strict&&!speech.trim())throw new Error(`Рядок ${i+1}: введіть репліку.`);
+ result.push({id:uid(),type:'dialogue',characterId:c.id,text:speech});
+ }else result.push({id:uid(),type:line.startsWith('(')?'direction':'heading',characterId:null,text:line.startsWith('(')?line.slice(1):line});
+ }
+ result.forEach(l=>{if(l.type==='direction')l.text=l.text.replace(/\)$/,'');});
+ return result;
+}
+function scriptPreview(lines){return lines.map(l=>{const c=state.characters.find(c=>c.id===l.characterId);return `<div class="script-entry ${l.type}" style="--speaker-color:${c?characterColor(c):'#66665f'}">${c?`<h3>${esc(c.name)}</h3>`:''}<div class="script-text">${esc(l.text)}</div></div>`;}).join('');}
+function renderScriptEditor(){
+ if(scriptDraft===null)scriptDraft=scriptToText(state.script||[]);
+ return `<div class="section-head"><div><h2>Сценарій</h2><p class="subtext"><b>-</b> на початку рядка — репліка · <b>(</b> — дія · звичайний текст — заголовок</p></div><button class="primary" id="save-script-text">Зберегти сценарій</button></div><p id="script-save-status" role="status">${scriptDirty?'Є незбережені зміни':'Усі зміни збережено'}</p><div class="script-editor-wrap"><label class="tiny-heading" for="script-editor">ТЕКСТ СЦЕНАРІЮ</label><textarea id="script-editor" spellcheck="true" placeholder="Сцена перша\n\n(Світло повільно згасає)\n\n-" aria-describedby="script-help">${esc(scriptDraft)}</textarea><div id="script-character-menu" hidden><label for="script-character-choice">Хто говорить?</label><select id="script-character-choice" size="7" aria-label="Персонаж для репліки">${state.characters.map(c=>`<option value="${esc(c.id)}" style="color:${characterColor(c)}">${esc(speakerLabel(c))}${c.actor?' · '+esc(c.actor):''}</option>`).join('')}</select><button class="primary" id="choose-script-character">Обрати персонажа</button></div></div><p class="subtext" id="script-help">Enter — новий рядок. Два пробіли на початку — продовження попередньої репліки. Ctrl / ⌘ + Enter — зберегти.</p><p class="tiny-heading preview-label">ПОПЕРЕДНІЙ ПЕРЕГЛЯД</p><div id="script-live-preview" class="script-page">${scriptPreview(parseScript(scriptDraft,false))}</div>`;
+}
+function bindScriptEditor(){
+ const input=$('#script-editor'),menu=$('#script-character-menu'),choice=$('#script-character-choice');
+ const currentLine=()=>{const start=input.value.lastIndexOf('\n',input.selectionStart-1)+1;const end=input.value.indexOf('\n',input.selectionStart);return {start,end:end<0?input.value.length:end,text:input.value.slice(start,end<0?input.value.length:end)};};
+ const updateMenu=()=>{const line=currentLine().text;menu.hidden=!/^\s*-/.test(line)||state.characters.some(c=>line.trimStart().startsWith(`- ${speakerLabel(c)}:`));};
+ const update=()=>{scriptDraft=input.value;scriptDirty=true;$('#script-save-status').textContent='Є незбережені зміни';$('#script-live-preview').innerHTML=scriptPreview(parseScript(scriptDraft,false));updateMenu();};
+ input.addEventListener('input',update);input.addEventListener('click',updateMenu);input.addEventListener('keyup',updateMenu);
+ const choose=()=>{const c=state.characters.find(c=>c.id===choice.value);if(!c)return;const line=currentLine();const content=line.text.replace(/^\s*-\s*/,'');const value=`- ${speakerLabel(c)}: ${content}`;input.setRangeText(value,line.start,line.end,'end');input.focus();update();};
+ $('#choose-script-character').onclick=choose;choice.addEventListener('click',choose);choice.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();choose();}if(e.key==='Escape'){menu.hidden=true;input.focus();}});
+ input.addEventListener('keydown',e=>{if(e.key==='ArrowDown'&&!menu.hidden){e.preventDefault();choice.focus();}if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){e.preventDefault();$('#save-script-text').click();}if(e.key==='Escape')menu.hidden=true;});
+ $('#save-script-text').onclick=async()=>{
+ const button=$('#save-script-text');button.disabled=true;input.readOnly=true;menu.hidden=true;
+ try{const lines=parseScript(input.value);await mutate(s=>{s.script=lines;});scriptDirty=false;scriptDraft=null;render();}
+ catch(e){$('#script-save-status').textContent=e.message;}
+ finally{button.disabled=false;input.readOnly=false;}
+ };
+}
+
 function renderScript(){
+ if(editor)return renderScriptEditor();
  const lines=state.script||[];
  return `<div class="section-head"><div><h2>Сценарій</h2><p class="subtext">Повний текст вистави: репліки, ремарки та сцени.</p></div>${editor?action('add-script','+ Додати текст','','primary'):''}</div><div class="script-page">${lines.map((line,i)=>{
  const c=state.characters.find(c=>c.id===line.characterId);
@@ -161,7 +212,7 @@ $('#content').addEventListener('click',e=>{
 $('#content').addEventListener('change',async e=>{if(!e.target.matches('[data-check]'))return;const target=e.target;target.disabled=true;try{await mutate(s=>{s.props.find(x=>x.id===target.dataset.check).done=target.checked;});}catch(err){render();notify(err.message);}});
 $('#content').addEventListener('error',e=>{if(e.target.tagName==='IMG')e.target.parentNode.innerHTML=portrait;},true);
 window.addEventListener('hashchange',render);
-window.addEventListener('beforeunload',e=>{if(saving||submitting){e.preventDefault();e.returnValue='';}});
+window.addEventListener('beforeunload',e=>{if(saving||submitting||scriptDirty){e.preventDefault();e.returnValue='';}});
 $('#stage-dots').innerHTML='<i></i>'.repeat(36);
 // Refresh authenticated sessions in memory; no credentials are written to localStorage.
 setInterval(async()=>{if(!session)return;if(session.expires_at*1000-Date.now()<120000){try{session=await api('/auth/v1/token?grant_type=refresh_token',{method:'POST',body:JSON.stringify({refresh_token:session.refresh_token})});}catch{session=null;editor=false;render();notify('Увійдіть повторно, щоб редагувати.');}}},30000);

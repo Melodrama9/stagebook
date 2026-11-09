@@ -76,3 +76,14 @@ test('script rendering uses current character color and safely renders guest tex
  const html=a.run('renderScript()');assert.match(html,/--speaker-color:#123456/);assert.match(html,/&lt;script&gt;/);assert.doesNotMatch(html,/data-action=/);
  a.run('state.characters[0].color="#654321"');assert.match(a.run('renderScript()'),/--speaker-color:#654321/);
 });
+test('text commands parse dialogue, actions and headings and reject unassigned speech',()=>{
+ const a=app();
+ const lines=a.run('parseScript("Сцена 1\\n\\n- Персонаж 01 [1]: Вітаю!\\n(Пауза)")');
+ assert.equal(lines[0].type,'heading');assert.equal(lines[1].characterId,'c1');assert.equal(lines[1].text,'Вітаю!');assert.equal(lines[2].type,'direction');assert.equal(lines[2].text,'Пауза');
+ assert.throws(()=>a.run('parseScript("- Вітаю")'),/оберіть персонажа/);
+});
+test('existing multiline script round-trips through whole-text editing',()=>{
+ const a=app();a.run('state.script=[{id:"s1",type:"dialogue",characterId:"c2",text:"Перша\\nДруга"},{id:"s2",type:"direction",characterId:null,text:"Рух\\nПауза"}]');
+ const lines=a.run('parseScript(scriptToText(state.script))');
+ assert.equal(lines[0].text,'Перша\nДруга');assert.equal(lines[0].characterId,'c2');assert.equal(lines[1].text,'Рух\nПауза');
+});
