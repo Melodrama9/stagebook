@@ -60,3 +60,19 @@ test('failed photo upload preserves the entire character; text-only edits retain
  await a.run('saveCharacter("c1",{name:"Changed",actor:"",bio:"",removePhoto:"on"})');
  assert.equal(a.run('state.characters[0].photo'),'');
 });
+test('script saves independently of focal points and retains speaker assignments',async()=>{
+ const a=app();a.run('editor=true;api=async()=>1;delete state.script');
+ await a.run('saveScriptLine(null,null,{type:"dialogue",characterId:"c2",text:"Вітаю!"})');
+ assert.equal(a.run('state.script[0].characterId'),'c2');assert.equal(a.run('state.points.length'),6);
+ assert.match(a.run('state.characters[1].color'),/^#[a-f0-9]{6}$/);
+ await a.run('saveScriptLine(null,state.script[0].id,{type:"direction",text:"Пауза."})');
+ assert.equal(a.run('state.script[1].characterId'),null);
+ await a.run('saveScriptLine(state.script[0].id,null,{type:"dialogue",characterId:"c3",text:"Інша репліка"})');
+ assert.equal(a.run('state.script[0].characterId'),'c3');
+ await assert.rejects(a.run('saveScriptLine(null,null,{type:"dialogue",characterId:"missing",text:"Hello"})'),/Оберіть персонажа/);
+});
+test('script rendering uses current character color and safely renders guest text',()=>{
+ const a=app();a.run('state.script=[{id:"s1",type:"dialogue",characterId:"c1",text:"<script>bad</script>"}];state.characters[0].color="#123456"');
+ const html=a.run('renderScript()');assert.match(html,/--speaker-color:#123456/);assert.match(html,/&lt;script&gt;/);assert.doesNotMatch(html,/data-action=/);
+ a.run('state.characters[0].color="#654321"');assert.match(a.run('renderScript()'),/--speaker-color:#654321/);
+});

@@ -15,6 +15,7 @@ const initial = {
     {id:'p6',title:'Спільний фінал',text:'Усі історії знову збираються в одному просторі. Остання дія, спільний подих, тиша.',focus:'Завершальна картина'}
   ],
   characters:Array.from({length:36},(_,i)=>({id:`c${i+1}`,name:`Персонаж ${String(i+1).padStart(2,'0')}`,actor:'',bio:'',photo:'',notes:{}})),
+  script:[],
   props:[]
 };
 function notify(message){$('#toast').textContent=message;$('#toast').style.display='block';clearTimeout(timer);timer=setTimeout(()=>$('#toast').style.display='none',4200);}
@@ -41,13 +42,15 @@ async function saveCharacter(id,data){
  const {name,actor,bio,photoFile,removePhoto}=data;
  if(!name.trim())throw new Error('Вкажіть ім’я.');
  const current=state.characters.find(c=>c.id===id);
+ const color=data.color||characterColor(current);
+ if(!/^#[0-9a-f]{6}$/i.test(color))throw new Error("Оберіть коректний колір.");
  let photo=removePhoto?'':current.photo;
  if(photoFile?.size){
   $('#submit-modal').textContent='Завантаження фото…';
   photo=await uploadPhoto(photoFile,id);
  }
  $('#submit-modal').textContent='Збереження…';
- await mutate(s=>Object.assign(s.characters.find(c=>c.id===id),{name,actor,bio,photo}));
+ await mutate(s=>Object.assign(s.characters.find(c=>c.id===id),{name,actor,bio,photo,color}));
 }
 
 async function load(){
@@ -58,7 +61,7 @@ async function load(){
 }
 async function mutate(change){
  if(!editor||saving)throw new Error('Увійдіть як редактор, щоб зберегти зміни.');
- const next=structuredClone(state);change(next);saving=true;
+ const next=structuredClone(state);next.characters.forEach(c=>{c.color=characterColor(c);});change(next);saving=true;
  try{const result=await api('/rest/v1/rpc/save_play',{method:'POST',body:JSON.stringify({expected_revision:revision,new_data:next})});state=next;revision=result;render();notify('Зміни збережено для всіх учасників');}finally{saving=false;}
 }
 const avatar=c=>`<div class="avatar">${c.photo?`<img src="${esc(c.photo)}" alt="${esc(c.name)}" loading="lazy">`:portrait}</div>`;
@@ -67,20 +70,47 @@ const action=(name,label,id,cls='quiet')=>`<button class="${cls}" data-action="$
 function pointActions(p,i){return editor?`<div class="actions">${action('edit-point','Редагувати',p.id)}${i>0?action('up','↑',p.id):''}${i<state.points.length-1?action('down','↓',p.id):''}${action('delete-point','Видалити',p.id,'quiet danger')}</div>`:'';}
 function render(){
  if(!state)return;
- const [tab='story',id]=location.hash.slice(1).split('/');
+ const [tab,id]=(location.hash.slice(1)||'script').split('/');
  document.querySelectorAll('nav a').forEach(a=>{a.classList.toggle('active',a.dataset.tab===tab);if(a.dataset.tab===tab)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});
  $('#mode-label').textContent=editor?'Режим редактора':'Режим перегляду';$('#login').textContent=editor?'Вийти з акаунта':'↗ Вхід для редактора';
  $('#notice').textContent=connected?'':'Демонстраційний вміст · Підключіть Supabase, щоб зберігати зміни та відкрити вхід редактора.';
  $('#footer-status').textContent=connected?`Спільна версія · ${revision}`:'Демонстраційний простір';
- const views={story:renderStory,characters:()=>renderCharacters(id),props:renderProps};$('#content').innerHTML=(views[tab]||renderStory)();
+ const views={script:renderScript,story:renderStory,characters:()=>renderCharacters(id),props:renderProps};$('#content').innerHTML=(views[tab]||renderScript)();
  $('#search')?.addEventListener('input',e=>{const q=e.target.value.toLocaleLowerCase('uk');document.querySelectorAll('.character-card').forEach(c=>c.hidden=!c.dataset.search.includes(q));$('#no-results').hidden=[...document.querySelectorAll('.character-card')].some(c=>!c.hidden);});
  $('#character-select')?.addEventListener('change',e=>location.hash=`characters/${e.target.value}`);
 }
+
+function characterColor(c){
+ if(/^#[0-9a-f]{6}$/i.test(c?.color||''))return c.color;
+ const i=Math.max(0,state.characters.findIndex(x=>x.id===c?.id));
+ const hue=(i*137.508)%360, saturation=.62, lightness=.31;
+ const a=saturation*Math.min(lightness,1-lightness);
+ const component=n=>{const k=(n+hue/30)%12;return Math.round(255*(lightness-a*Math.max(-1,Math.min(k-3,9-k,1)))).toString(16).padStart(2,'0');};
+ return `#${component(0)}${component(8)}${component(4)}`;
+}
+function renderScript(){
+ const lines=state.script||[];
+ return `<div class="section-head"><div><h2>Сценарій</h2><p class="subtext">Повний текст вистави: репліки, ремарки та сцени.</p></div>${editor?action('add-script','+ Додати текст','','primary'):''}</div><div class="script-page">${lines.map((line,i)=>{
+ const c=state.characters.find(c=>c.id===line.characterId);
+ const color=line.type==='dialogue'&&c?characterColor(c):'#55564f';
+ return `<article class="script-entry ${esc(line.type)}" style="--speaker-color:${color}">${line.type==='dialogue'?`<h3>${esc(c?.name||'Персонаж')}${c?.actor?` <small>· ${esc(c.actor)}</small>`:''}</h3>`:''}<div class="script-text">${esc(line.text)}</div>${editor?`<div class="actions">${action('edit-script','Редагувати',line.id)}${action('insert-script','+ Після',line.id)}${i?action('script-up','↑',line.id):''}${i<lines.length-1?action('script-down','↓',line.id):''}${action('delete-script','Видалити',line.id,'quiet danger')}</div>`:''}</article>`;
+ }).join('')||'<div class="empty">Сценарій ще не додано.</div>'}</div>`;
+}
+function scriptForm(line){
+ return `<label for="script-type">Тип тексту</label><select name="type" id="script-type">${[['dialogue','Репліка'],['direction','Ремарка'],['heading','Сцена / заголовок']].map(([value,label])=>`<option value="${value}" ${line?.type===value?'selected':''}>${label}</option>`).join('')}</select><div id="speaker-fields"><label for="script-speaker">Хто говорить</label><select name="characterId" id="script-speaker">${state.characters.map(c=>`<option value="${esc(c.id)}" ${line?.characterId===c.id?'selected':''}>${esc(c.name)}${c.actor?' · '+esc(c.actor):''}</option>`).join('')}</select><p class="subtext">Колір репліки береться з профілю персонажа.</p></div>${field('Текст','text',line?.text,true)}`;
+}
+async function saveScriptLine(id,afterId,data){
+ if(!['dialogue','direction','heading'].includes(data.type)||!data.text.trim())throw new Error('Оберіть тип і введіть текст.');
+ if(data.type==='dialogue'&&!state.characters.some(c=>c.id===data.characterId))throw new Error('Оберіть персонажа.');
+ const entry={type:data.type,text:data.text,characterId:data.type==='dialogue'?data.characterId:null};
+ await mutate(s=>{s.script??=[];if(id)Object.assign(s.script.find(l=>l.id===id),entry);else{const at=afterId?s.script.findIndex(l=>l.id===afterId)+1:s.script.length;s.script.splice(at,0,{id:uid(),...entry});}});
+}
+
 function renderStory(){return `<div class="section-head"><div><h2>Основна історія</h2><p class="subtext">Послідовність подій та фокус уваги глядача.</p></div><div class="toolbar"><span class="count">${state.points.length} точок уваги</span>${editor?action('add-point','+ Додати точку',''):''}</div></div><div class="story-layout"><aside class="outline"><p class="tiny-heading">ЛІНІЯ ВИСТАВИ</p>${state.points.map((p,i)=>`<a href="#point-${esc(p.id)}" data-scroll="point-${esc(p.id)}"><span>${number(i)}</span>${esc(p.title)}</a>`).join('')}<p class="outline-note">Кожна точка поєднує основну історію з діями всіх 36 персонажів.</p></aside><div>${state.points.map((p,i)=>`<article class="point" id="point-${esc(p.id)}"><div class="point-top"><span class="point-no">${number(i)}</span><span class="point-tag">ТОЧКА УВАГИ</span></div><h3>${esc(p.title)}</h3><p>${esc(p.text)}</p>${pointActions(p,i)}</article>`).join('')||'<div class="empty">Додайте першу точку уваги для вашої вистави.</div>'}</div></div>`;}
 function renderCharacters(id){
  const c=state.characters.find(c=>c.id===id);
- if(c)return `<a class="back" href="#characters">← Усі персонажі</a><div class="section-head"><div><h2>Лінія персонажа</h2><p class="subtext">Особиста історія у спільному ритмі вистави.</p></div><select id="character-select" class="character-select" aria-label="Обрати персонажа">${state.characters.map(x=>`<option value="${esc(x.id)}" ${x.id===id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></div><div class="character-layout"><aside class="profile">${avatar(c)}<h2>${esc(c.name)}</h2><p>${esc(c.actor||'Ім’я актора ще не додано')}</p><p>${esc(c.bio||'Тут з’явиться інформація про персонажа: його характер, мотивація та зв’язки.')}</p>${editor?`<div class="actions">${action('edit-character','Редагувати профіль',c.id)}</div>`:''}</aside><div>${state.points.map((p,i)=>`<article class="point"><div class="point-top"><span class="point-no">${number(i)}</span><span class="point-tag">${esc(p.title)}</span></div><p>${esc(c.notes[p.id]||'Дії персонажа в цій точці ще не описані.')}</p>${editor?`<div class="actions">${action('edit-note','Редагувати дії',`${c.id}/${p.id}`)}</div>`:''}</article>`).join('')||'<div class="empty">Спочатку додайте точки в основній історії.</div>'}</div></div>`;
- return `<div class="section-head"><div><h2>36 персонажів</h2><p class="subtext">Оберіть персонажа, щоб побачити його історію.</p></div><input class="search" id="search" type="search" placeholder="Пошук персонажа чи актора…" aria-label="Пошук персонажа чи актора"></div><div class="character-grid">${state.characters.map((c,i)=>`<a class="character-card" href="#characters/${esc(c.id)}" data-search="${esc((c.name+' '+c.actor).toLocaleLowerCase('uk'))}">${avatar(c)}<h3>${esc(c.name)}</h3><small>${esc(c.actor||`Учасник ${number(i)}`)}</small></a>`).join('')}</div><p class="empty" id="no-results" hidden>Персонажів не знайдено.</p>`;
+ if(c)return `<a class="back" href="#characters">← Усі персонажі</a><div class="section-head"><div><h2>Лінія персонажа</h2><p class="subtext">Особиста історія у спільному ритмі вистави.</p></div><select id="character-select" class="character-select" aria-label="Обрати персонажа">${state.characters.map(x=>`<option value="${esc(x.id)}" ${x.id===id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></div><div class="character-layout"><aside class="profile">${avatar(c)}<h2><span class="color-dot" style="background:${characterColor(c)}"></span>${esc(c.name)}</h2><p>${esc(c.actor||'Ім’я актора ще не додано')}</p><p>${esc(c.bio||'Тут з’явиться інформація про персонажа: його характер, мотивація та зв’язки.')}</p>${editor?`<div class="actions">${action('edit-character','Редагувати профіль',c.id)}</div>`:''}</aside><div>${state.points.map((p,i)=>`<article class="point"><div class="point-top"><span class="point-no">${number(i)}</span><span class="point-tag">${esc(p.title)}</span></div><p>${esc(c.notes[p.id]||'Дії персонажа в цій точці ще не описані.')}</p>${editor?`<div class="actions">${action('edit-note','Редагувати дії',`${c.id}/${p.id}`)}</div>`:''}</article>`).join('')||'<div class="empty">Спочатку додайте точки в основній історії.</div>'}</div></div>`;
+ return `<div class="section-head"><div><h2>36 персонажів</h2><p class="subtext">Оберіть персонажа, щоб побачити його історію.</p></div><input class="search" id="search" type="search" placeholder="Пошук персонажа чи актора…" aria-label="Пошук персонажа чи актора"></div><div class="character-grid">${state.characters.map((c,i)=>`<a class="character-card" href="#characters/${esc(c.id)}" data-search="${esc((c.name+' '+c.actor).toLocaleLowerCase('uk'))}">${avatar(c)}<h3><span class="color-dot" style="background:${characterColor(c)}"></span>${esc(c.name)}</h3><small>${esc(c.actor||`Учасник ${number(i)}`)}</small></a>`).join('')}</div><p class="empty" id="no-results" hidden>Персонажів не знайдено.</p>`;
 }
 function renderProps(){const done=state.props.filter(p=>p.done).length;return `<div class="section-head"><div><h2>Список реквізиту</h2><p class="subtext">Усе, що має бути готове до виходу на сцену.</p></div>${editor?action('add-prop','+ Додати реквізит',''):'<span class="count">Лише перегляд</span>'}</div><div class="props-summary"><p class="tiny-heading">ГОТОВО ${done} ІЗ ${state.props.length}</p><div class="progress" aria-label="Готовність реквізиту"><i style="width:${state.props.length?done/state.props.length*100:0}%"></i></div></div>${state.props.length?`<div class="props-list">${state.props.map(p=>`<div class="prop-row ${p.done?'done':''}"><input type="checkbox" aria-label="${esc(p.name)} — готово" data-check="${esc(p.id)}" ${p.done?'checked':''} ${editor?'':'disabled'}><div class="prop-info"><strong>${esc(p.name)}</strong><p>${esc(p.note)}</p></div>${editor?`<div class="actions">${action('edit-prop','Змінити',p.id)}${action('delete-prop','×',p.id,'quiet danger')}</div>`:''}</div>`).join('')}</div>`:'<div class="empty"><h3>Місце для важливих деталей</h3><p>Реквізит ще не додано. Тут буде список речей та їхня готовність.</p></div>'}`;}
 function field(label,name,value='',multi=false,type='text'){return `<label for="field-${name}">${label}</label>${multi?`<textarea id="field-${name}" name="${name}" maxlength="20000">${esc(value)}</textarea>`:`<input id="field-${name}" name="${name}" type="${type}" value="${esc(value)}" ${['title','name','email','password'].includes(name)?'required':''} maxlength="${name==='photo'?2000:300}" ${type==='password'?'autocomplete="current-password"':''}>`}`;}
@@ -101,10 +131,17 @@ $('#login').onclick=async()=>{
 $('#content').addEventListener('click',e=>{
  const link=e.target.closest('[data-scroll]');if(link){e.preventDefault();document.getElementById(link.dataset.scroll)?.scrollIntoView({behavior:'smooth'});return;}
  const b=e.target.closest('[data-action]');if(!b||!editor)return;const {action:a,id}=b.dataset,p=state.points.find(p=>p.id===id),c=state.characters.find(c=>c.id===id),prop=state.props.find(p=>p.id===id);
+ if(['add-script','edit-script','insert-script'].includes(a)){
+ const line=a==='edit-script'?(state.script||[]).find(l=>l.id===id):null;
+ modal(line?'Редагувати текст':'Додати до сценарію',scriptForm(line),d=>saveScriptLine(line?.id,a==='insert-script'?id:null,d));
+ const toggle=()=>{$('#speaker-fields').hidden=$('#script-type').value!=='dialogue';};$('#script-type').addEventListener('change',toggle);toggle();
+ }
+ if(a==='script-up'||a==='script-down')mutate(s=>{const i=s.script.findIndex(l=>l.id===id),j=i+(a==='script-up'?-1:1);if(j>=0&&j<s.script.length)[s.script[i],s.script[j]]=[s.script[j],s.script[i]];}).catch(e=>notify(e.message));
+ if(a==='delete-script')modal('Видалити текст?','<p>Цей фрагмент буде видалено зі сценарію.</p>',()=>mutate(s=>{s.script=s.script.filter(l=>l.id!==id);}),'Видалити');
  if(a==='add-point'||a==='edit-point')modal(p?'Редагувати точку':'Нова точка уваги',field('Назва','title',p?.title)+field('Основна історія','text',p?.text,true),d=>{if(!d.title.trim())throw new Error('Вкажіть назву.');return mutate(s=>{if(p)Object.assign(s.points.find(x=>x.id===id),d);else s.points.push({id:uid(),...d});});});
  if(a==='up'||a==='down')mutate(s=>{const i=s.points.findIndex(x=>x.id===id),j=i+(a==='up'?-1:1);[s.points[i],s.points[j]]=[s.points[j],s.points[i]];}).catch(e=>notify(e.message));
  if(a==='delete-point')modal('Видалити точку?',`<p>«${esc(p.title)}» та відповідні дії всіх персонажів буде видалено.</p>`,()=>mutate(s=>{s.points=s.points.filter(x=>x.id!==id);s.characters.forEach(x=>delete x.notes[id]);}),'Видалити');
- if(a==='edit-character')modal('Профіль персонажа',field('Ім’я персонажа','name',c.name)+field('Ім’я актора','actor',c.actor)+field('Про персонажа','bio',c.bio,true)+'<label for="field-photo-file">Фото з пристрою</label><input id="field-photo-file" name="photoFile" type="file" accept="image/jpeg,image/png,image/webp,image/gif" aria-describedby="photo-help"><p id="photo-help" class="subtext">JPG, PNG, WebP або GIF · до 5 МБ. Нове фото буде завантажено після збереження. Без нового файлу поточне фото залишиться.</p>'+(c.photo?'<label class="photo-remove"><input type="checkbox" name="removePhoto"> Прибрати поточне фото</label>':''),d=>saveCharacter(id,d));
+ if(a==='edit-character')modal('Профіль персонажа',field('Ім’я персонажа','name',c.name)+field('Ім’я актора','actor',c.actor)+field('Про персонажа','bio',c.bio,true)+field('Колір персонажа','color',characterColor(c),false,'color')+'<label for="field-photo-file">Фото з пристрою</label><input id="field-photo-file" name="photoFile" type="file" accept="image/jpeg,image/png,image/webp,image/gif" aria-describedby="photo-help"><p id="photo-help" class="subtext">JPG, PNG, WebP або GIF · до 5 МБ. Нове фото буде завантажено після збереження. Без нового файлу поточне фото залишиться.</p>'+(c.photo?'<label class="photo-remove"><input type="checkbox" name="removePhoto"> Прибрати поточне фото</label>':''),d=>saveCharacter(id,d));
  if(a==='edit-note'){const [cid,pid]=id.split('/'),char=state.characters.find(x=>x.id===cid);modal('Дії персонажа',field('Що робить персонаж у цій точці?','note',char.notes[pid],true),d=>mutate(s=>{s.characters.find(x=>x.id===cid).notes[pid]=d.note;}));}
  if(a==='add-prop'||a==='edit-prop')modal(prop?'Редагувати реквізит':'Новий реквізит',field('Назва речі','name',prop?.name)+field('Кількість, відповідальний або примітка','note',prop?.note,true),d=>{if(!d.name.trim())throw new Error('Вкажіть назву.');return mutate(s=>{if(prop)Object.assign(s.props.find(x=>x.id===id),d);else s.props.push({id:uid(),done:false,...d});});});
  if(a==='delete-prop')modal('Видалити реквізит?',`<p>Видалити «${esc(prop.name)}» зі списку?</p>`,()=>mutate(s=>{s.props=s.props.filter(x=>x.id!==id);}),'Видалити');
