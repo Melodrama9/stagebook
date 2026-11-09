@@ -102,3 +102,18 @@ test('mini-story creation and editing preserve the original script and actor pro
  assert.doesNotMatch(a.run('renderScript()'),/data-action=/);
  assert.equal(a.run('JSON.stringify(state.script)===original && JSON.stringify(state.characters)===profiles'),true);
 });
+
+test('renaming either scenario changes only its title and preserves the active draft',async()=>{
+ const a=app();
+ a.run('editor=true;api=async()=>revision+1;state.scenarios=[{id:"duet",title:"Duet",script:[]}];const original=structuredClone(state);scriptDirty=true;scriptDraft="Unsaved text"');
+ await a.run('renameScenario("", "  Прем’єра  ")');
+ await a.run('renameScenario("duet", "Дует <2>")');
+ await assert.rejects(a.run('renameScenario("duet","   ")'),/Вкажіть назву/);
+ assert.equal(a.run('state.mainScenarioTitle'),'Прем’єра');
+ assert.equal(a.run('state.scenarios[0].title'),'Дует <2>');
+ assert.equal(a.run('scriptDirty && scriptDraft==="Unsaved text"'),true);
+ assert.equal(a.run('original.mainScenarioTitle=state.mainScenarioTitle;original.scenarios[0].title=state.scenarios[0].title;JSON.stringify(original)===JSON.stringify(state)'),true);
+ a.run('editor=false');
+ assert.match(a.run('renderScript()'),/Дует &lt;2&gt;/);
+ assert.doesNotMatch(a.run('renderScript()'),/rename-scenario/);
+});

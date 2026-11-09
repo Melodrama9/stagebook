@@ -24,6 +24,21 @@ function switchScenario(id) {
  return true;
 }
 
+function scenarioTitle(play,id) {
+ if (!id) return play.mainScenarioTitle || 'Основний сценарій';
+ return play.scenarios.find(item=>item.id===id).title;
+}
+
+async function renameScenario(id,title) {
+ title=title.trim();
+ if (!title) throw new Error('Вкажіть назву сценарію.');
+ if (title===scenarioTitle(state,id)) return;
+ await mutate(play=>{
+  if (id) play.scenarios.find(item=>item.id===id).title=title;
+  else play.mainScenarioTitle=title;
+ });
+}
+
 async function createScenario(title) {
  title=title.trim();
  if (!title) throw new Error('Вкажіть назву сценарію.');
@@ -182,7 +197,8 @@ function bindScriptEditor(){
 
 function renderScript(){
  const options=(state.scenarios||[]).map(item=>`<option value="${esc(item.id)}" ${item.id===scenarioId?'selected':''}>${esc(item.title)}</option>`).join('');
- const toolbar=`<div class="scenario-toolbar"><label for="scenario-select">Обрати сценарій</label><select id="scenario-select"><option value="">Основний сценарій</option>${options}</select>${editor?action('new-scenario','+ Новий сценарій',''):''}</div>`;
+ const controls=editor?action('rename-scenario','Перейменувати',scenarioId)+action('new-scenario','+ Новий сценарій',''):'';
+ const toolbar=`<div class="scenario-toolbar"><label for="scenario-select">Обрати сценарій</label><select id="scenario-select"><option value="">${esc(scenarioTitle(state,''))}</option>${options}</select>${controls}</div>`;
  return toolbar+(editor?renderScriptEditor():renderScriptReader());
 }
 function renderScriptReader(){
@@ -229,6 +245,7 @@ $('#content').addEventListener('click',e=>{
  const link=e.target.closest('[data-scroll]');if(link){e.preventDefault();document.getElementById(link.dataset.scroll)?.scrollIntoView({behavior:'smooth'});return;}
  const b=e.target.closest('[data-action]');if(!b||!editor)return;const {action:a,id}=b.dataset,p=state.points.find(p=>p.id===id),c=state.characters.find(c=>c.id===id),prop=state.props.find(p=>p.id===id);
  if(a==='new-scenario')modal('Новий сценарій',field('Назва сценарію','title'),data=>createScenario(data.title),'Створити');
+ if(a==='rename-scenario')modal('Перейменувати сценарій',field('Назва сценарію','title',scenarioTitle(state,id)),data=>renameScenario(id,data.title));
  if(['add-script','edit-script','insert-script'].includes(a)){
  const line=a==='edit-script'?(state.script||[]).find(l=>l.id===id):null;
  modal(line?'Редагувати текст':'Додати до сценарію',scriptForm(line),d=>saveScriptLine(line?.id,a==='insert-script'?id:null,d));
