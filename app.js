@@ -4,7 +4,7 @@ const uid = () => crypto.randomUUID();
 const portrait = '<svg viewBox="0 0 80 80" fill="none" aria-hidden="true"><circle cx="40" cy="27" r="13" stroke="currentColor" stroke-width="1.5"/><path d="M14 69c0-18 11-27 26-27s26 9 26 27" stroke="currentColor" stroke-width="1.5"/></svg>';
 const config = window.STAGE_CONFIG || {};
 const connected = Boolean(config.supabaseUrl && config.supabaseAnonKey);
-let session = null, editor = false, state, revision = 0, saving = false, timer;
+let session = null, editor = false, state, revision = 0, saving = false, submitting = false, timer;
 const initial = {
   points: [
     {id:'p1',title:'Тиша перед початком',text:'Усі 36 персонажів уже на сцені. Простір завмирає. Перший погляд, невеликий рух — і увага глядача знаходить свою початкову точку.',focus:'Спільний простір та перший рух'},
@@ -23,6 +23,33 @@ async function api(path, options={}){
  if(!res.ok){if(res.status===401){editor=false;session=null;render();}throw new Error(res.status===401?'Сеанс завершено. Увійдіть знову.':res.status===403?'Немає дозволу на редагування.':res.status===409?'Дані вже змінилися в іншому вікні. Оновіть сторінку перед редагуванням.':'Не вдалося виконати запит. Перевірте з’єднання та налаштування.');}
  return res.status===204?null:res.json();
 }
+
+const photoTypes = {'image/jpeg':'jpg','image/png':'png','image/webp':'webp','image/gif':'gif'};
+function validatePhoto(file){
+ if(!photoTypes[file.type])throw new Error('Оберіть фото у форматі JPG, PNG, WebP або GIF.');
+ if(!file.size || file.size>5*1024*1024)throw new Error('Фото має бути непорожнім і не перевищувати 5 МБ.');
+}
+async function uploadPhoto(file,characterId){
+ if(!editor||!session)throw new Error('Увійдіть як редактор, щоб завантажити фото.');
+ validatePhoto(file);
+ const path=`${characterId}/${uid()}.${photoTypes[file.type]}`;
+ await api(`/storage/v1/object/character-photos/${path}`,{method:'POST',body:file,headers:{'Content-Type':file.type,'Cache-Control':'max-age=31536000','x-upsert':'false'}});
+ return `${config.supabaseUrl.replace(/\/$/,'')}/storage/v1/object/public/character-photos/${path}`;
+}
+async function saveCharacter(id,data){
+ if(!editor)throw new Error('Увійдіть як редактор, щоб зберегти зміни.');
+ const {name,actor,bio,photoFile,removePhoto}=data;
+ if(!name.trim())throw new Error('Вкажіть ім’я.');
+ const current=state.characters.find(c=>c.id===id);
+ let photo=removePhoto?'':current.photo;
+ if(photoFile?.size){
+  $('#submit-modal').textContent='Завантаження фото…';
+  photo=await uploadPhoto(photoFile,id);
+ }
+ $('#submit-modal').textContent='Збереження…';
+ await mutate(s=>Object.assign(s.characters.find(c=>c.id===id),{name,actor,bio,photo}));
+}
+
 async function load(){
  if(!connected){state=structuredClone(initial);render();return;}
  $('#content').innerHTML='<p class="loading">Завантаження вистави…</p>';
@@ -59,9 +86,10 @@ function renderProps(){const done=state.props.filter(p=>p.done).length;return `<
 function field(label,name,value='',multi=false,type='text'){return `<label for="field-${name}">${label}</label>${multi?`<textarea id="field-${name}" name="${name}" maxlength="20000">${esc(value)}</textarea>`:`<input id="field-${name}" name="${name}" type="${type}" value="${esc(value)}" ${['title','name','email','password'].includes(name)?'required':''} maxlength="${name==='photo'?2000:300}" ${type==='password'?'autocomplete="current-password"':''}>`}`;}
 function modal(title,body,submit,label='Зберегти'){
  $('#modal-title').textContent=title;$('#modal-body').innerHTML=body;$('#form-error').textContent='';$('#submit-modal').textContent=label;$('#submit-modal').disabled=false;
- $('#modal-form').onsubmit=async e=>{e.preventDefault();$('#form-error').textContent='';$('#submit-modal').disabled=true;try{await submit(Object.fromEntries(new FormData(e.target)));$('#modal').close();}catch(err){$('#form-error').textContent=err.message;}finally{$('#submit-modal').disabled=false;}};$('#modal').showModal();
+ $('#modal-form').onsubmit=async e=>{e.preventDefault();if(submitting)return;submitting=true;$('#form-error').textContent='';$('#submit-modal').disabled=true;$('#close-modal').disabled=$('#cancel-modal').disabled=true;try{await submit(Object.fromEntries(new FormData(e.target)));$('#modal').close();}catch(err){$('#form-error').textContent=err.message;}finally{submitting=false;$('#submit-modal').disabled=false;$('#submit-modal').textContent=label;$('#close-modal').disabled=$('#cancel-modal').disabled=false;}};$('#modal').showModal();
 }
-$('#close-modal').onclick=$('#cancel-modal').onclick=()=>{if(!saving)$('#modal').close();};
+$('#close-modal').onclick=$('#cancel-modal').onclick=()=>{if(!saving&&!submitting)$('#modal').close();};
+$('#modal').addEventListener('cancel',e=>{if(submitting||saving)e.preventDefault();});
 $('#login').onclick=async()=>{
  if(editor){try{await api('/auth/v1/logout',{method:'POST'});}catch{}session=null;editor=false;render();return;}
  if(!connected){modal('Вхід ще не підключено','<p>Для входу редактора потрібно підключити Supabase та призначити один акаунт редактором. Інструкція є у файлі README репозиторію.</p>',async()=>{},'Зрозуміло');return;}
@@ -76,7 +104,7 @@ $('#content').addEventListener('click',e=>{
  if(a==='add-point'||a==='edit-point')modal(p?'Редагувати точку':'Нова точка уваги',field('Назва','title',p?.title)+field('Основна історія','text',p?.text,true),d=>{if(!d.title.trim())throw new Error('Вкажіть назву.');return mutate(s=>{if(p)Object.assign(s.points.find(x=>x.id===id),d);else s.points.push({id:uid(),...d});});});
  if(a==='up'||a==='down')mutate(s=>{const i=s.points.findIndex(x=>x.id===id),j=i+(a==='up'?-1:1);[s.points[i],s.points[j]]=[s.points[j],s.points[i]];}).catch(e=>notify(e.message));
  if(a==='delete-point')modal('Видалити точку?',`<p>«${esc(p.title)}» та відповідні дії всіх персонажів буде видалено.</p>`,()=>mutate(s=>{s.points=s.points.filter(x=>x.id!==id);s.characters.forEach(x=>delete x.notes[id]);}),'Видалити');
- if(a==='edit-character')modal('Профіль персонажа',field('Ім’я персонажа','name',c.name)+field('Ім’я актора','actor',c.actor)+field('Про персонажа','bio',c.bio,true)+field('Посилання на фото (HTTPS)','photo',c.photo,false,'url')+'<p class="subtext">Залиште порожнім, щоб показати стандартний портрет.</p>',d=>{if(!d.name.trim())throw new Error('Вкажіть ім’я.');if(d.photo&&!/^https:\/\//i.test(d.photo))throw new Error('Використовуйте HTTPS-посилання на фото.');return mutate(s=>Object.assign(s.characters.find(x=>x.id===id),d));});
+ if(a==='edit-character')modal('Профіль персонажа',field('Ім’я персонажа','name',c.name)+field('Ім’я актора','actor',c.actor)+field('Про персонажа','bio',c.bio,true)+'<label for="field-photo-file">Фото з пристрою</label><input id="field-photo-file" name="photoFile" type="file" accept="image/jpeg,image/png,image/webp,image/gif" aria-describedby="photo-help"><p id="photo-help" class="subtext">JPG, PNG, WebP або GIF · до 5 МБ. Нове фото буде завантажено після збереження. Без нового файлу поточне фото залишиться.</p>'+(c.photo?'<label class="photo-remove"><input type="checkbox" name="removePhoto"> Прибрати поточне фото</label>':''),d=>saveCharacter(id,d));
  if(a==='edit-note'){const [cid,pid]=id.split('/'),char=state.characters.find(x=>x.id===cid);modal('Дії персонажа',field('Що робить персонаж у цій точці?','note',char.notes[pid],true),d=>mutate(s=>{s.characters.find(x=>x.id===cid).notes[pid]=d.note;}));}
  if(a==='add-prop'||a==='edit-prop')modal(prop?'Редагувати реквізит':'Новий реквізит',field('Назва речі','name',prop?.name)+field('Кількість, відповідальний або примітка','note',prop?.note,true),d=>{if(!d.name.trim())throw new Error('Вкажіть назву.');return mutate(s=>{if(prop)Object.assign(s.props.find(x=>x.id===id),d);else s.props.push({id:uid(),done:false,...d});});});
  if(a==='delete-prop')modal('Видалити реквізит?',`<p>Видалити «${esc(prop.name)}» зі списку?</p>`,()=>mutate(s=>{s.props=s.props.filter(x=>x.id!==id);}),'Видалити');
@@ -84,7 +112,7 @@ $('#content').addEventListener('click',e=>{
 $('#content').addEventListener('change',async e=>{if(!e.target.matches('[data-check]'))return;const target=e.target;target.disabled=true;try{await mutate(s=>{s.props.find(x=>x.id===target.dataset.check).done=target.checked;});}catch(err){render();notify(err.message);}});
 $('#content').addEventListener('error',e=>{if(e.target.tagName==='IMG')e.target.parentNode.innerHTML=portrait;},true);
 window.addEventListener('hashchange',render);
-window.addEventListener('beforeunload',e=>{if(saving){e.preventDefault();e.returnValue='';}});
+window.addEventListener('beforeunload',e=>{if(saving||submitting){e.preventDefault();e.returnValue='';}});
 $('#stage-dots').innerHTML='<i></i>'.repeat(36);
 // Refresh authenticated sessions in memory; no credentials are written to localStorage.
 setInterval(async()=>{if(!session)return;if(session.expires_at*1000-Date.now()<120000){try{session=await api('/auth/v1/token?grant_type=refresh_token',{method:'POST',body:JSON.stringify({refresh_token:session.refresh_token})});}catch{session=null;editor=false;render();notify('Увійдіть повторно, щоб редагувати.');}}},30000);

@@ -35,3 +35,28 @@ test('saving failure preserves previous content; successful save updates revisio
 test('guests cannot invoke save operations',async()=>{
  const a=app();await assert.rejects(a.run("mutate(s=>s.props.push({name:'x'}))"),/Увійдіть/);assert.equal(a.run('state.props.length'),0);
 });
+test('photo upload validates type and size before any network request',async()=>{
+ const a=app();a.run('editor=true;session={access_token:"test"}');
+ await assert.rejects(a.run('uploadPhoto({type:"image/svg+xml",size:20},"c1")'),/форматі/);
+ await assert.rejects(a.run('uploadPhoto({type:"image/png",size:5242881},"c1")'),/5 МБ/);
+ await assert.rejects(a.run('uploadPhoto({type:"image/png",size:0},"c1")'),/непорожнім/);
+ a.run('editor=false');await assert.rejects(a.run('uploadPhoto({type:"image/png",size:20},"c1")'),/Увійдіть/);
+});
+test('photo upload sends binary file and saves a public unique URL',async()=>{
+ const a=app();a.run('editor=true;session={access_token:"test"};config.supabaseUrl="https://example.supabase.co";let calls=[];api=async(path,options)=>{calls.push({path,options});return path.includes("save_play")?1:{Key:"ok"}}');
+ await a.run('saveCharacter("c1",{name:"Новий персонаж",actor:"Актор",bio:"Опис",photoFile:{type:"image/png",size:20}})');
+ assert.match(a.run('state.characters[0].photo'),/^https:\/\/example.supabase.co\/storage\/v1\/object\/public\/character-photos\/c1\/[a-f0-9-]+\.png$/);
+ assert.equal(a.run('calls[0].options.headers["Content-Type"]'),'image/png');
+ assert.equal(a.run('calls[0].options.body.size'),20);
+ assert.equal(a.run('state.characters[0].name'),'Новий персонаж');
+});
+test('failed photo upload preserves the entire character; text-only edits retain existing photo',async()=>{
+ const a=app();a.run('editor=true;session={access_token:"test"};state.characters[0].photo="https://example.com/old.png";api=async()=>{throw Error("upload failed")}');
+ await assert.rejects(a.run('saveCharacter("c1",{name:"Changed",actor:"",bio:"",photoFile:{type:"image/png",size:20}})'),/upload failed/);
+ assert.equal(a.run('state.characters[0].name'),'Персонаж 01');
+ assert.equal(a.run('state.characters[0].photo'),'https://example.com/old.png');
+ a.run('api=async()=>1');await a.run('saveCharacter("c1",{name:"Changed",actor:"",bio:"",photoFile:{size:0}})');
+ assert.equal(a.run('state.characters[0].photo'),'https://example.com/old.png');
+ await a.run('saveCharacter("c1",{name:"Changed",actor:"",bio:"",removePhoto:"on"})');
+ assert.equal(a.run('state.characters[0].photo'),'');
+});

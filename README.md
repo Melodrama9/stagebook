@@ -6,7 +6,7 @@ A Ukrainian rehearsal workspace for 36 characters, hosted as a static website on
 
 - Three tabs: Основна історія, Персонаж, Список реквізиту.
 - Add, edit, delete, and reorder story focal points. All 36 character timelines derive from the same point IDs and stay aligned; deleting a point also deletes its character notes after confirmation.
-- Character search, editable name/actor/biography, optional HTTPS portrait URL, and individual actions at every focal point. Profiles appear beside timelines on desktop and above them on mobile.
+- Character search, editable name/actor/biography, optional device photo upload, and individual actions at every focal point. Profiles appear beside timelines on desktop and above them on mobile.
 - Add/edit/delete props with readiness checkboxes. Guests can read every section; only the designated editor can change anything.
 - Server-enforced single editor, atomic updates, and optimistic concurrency protection. Credentials stay in memory; reloading requires logging in again. Guests see current content on page load/refresh.
 - Without Supabase configuration, a clearly marked, read-only demonstration appears. Demonstration stories are illustrative; the real database starts with 36 blank character profiles and no story points or props.
@@ -31,7 +31,7 @@ The security advisor flags `save_play` as an authenticated SECURITY DEFINER func
 5. In `config.js`, set `supabaseUrl` to your project URL and `supabaseAnonKey` to its **publishable key** or legacy **anon key**. These settings are public. Never use a service-role or secret key.
 6. Commit the configuration. After Pages redeploys, select **Вхід для редактора** and use the email/password you created.
 
-The app reads `/rest/v1/play` and saves only through the `save_play` RPC. No guest or ordinary authenticated user has write access. There is no front-end-only password protection. Photo URLs must be HTTPS and publicly accessible; photos are linked rather than uploaded.
+The app reads `/rest/v1/play` and saves only through the `save_play` RPC. No guest or ordinary authenticated user has write access. There is no front-end-only password protection. Photos can be uploaded from a device (JPG, PNG, WebP, GIF; up to 5 MB) to the public `character-photos` Supabase bucket. Only the sole editor can upload. Each upload uses a unique filename so replacement photos avoid stale caches. Existing photo links remain supported for viewing. Removing/replacing a photo changes the profile reference; old files are retained in Storage and can be cleaned up there.
 
 ## GitHub Pages
 
