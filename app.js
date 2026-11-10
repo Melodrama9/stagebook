@@ -217,7 +217,11 @@ async function downloadScenario(button) {
   for(const line of lines){
    if(line.type==='dialogue'){
     const speaker=state.characters.find(c=>c.id===line.characterId);
-    if(speaker)content.push({text:speaker.name,bold:true,color:characterColor(speaker),headlineLevel:1});
+    if(speaker){
+     const actor=speaker.actor?.trim();
+     const label=actor?`${speaker.name} · ${actor}`:speaker.name;
+     content.push({text:label,bold:true,color:characterColor(speaker),headlineLevel:1});
+    }
    }
    content.push({text:line.text,bold:line.type==='heading',italics:line.type==='direction',margin:[0,2,0,9]});
   }

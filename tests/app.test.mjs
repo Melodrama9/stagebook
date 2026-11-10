@@ -124,4 +124,8 @@ test('PDF button exports the selected scenario when clicked',async()=>{
  await a.nodes.get('#download-scenario').onclick();
  assert.equal(a.run('exported.name'),'Дует.pdf');
  assert.equal(a.run('exported.doc.content[1].text'),'Сцена');
+ a.run('state.characters[0].actor="Олена";state.characters[1].actor=" ";state.scenarios[0].script=state.characters.slice(0,2).map(c=>({type:"dialogue",characterId:c.id,text:"Вітаю!"}))');
+ await a.nodes.get('#download-scenario').onclick();
+ assert.equal(a.run('exported.doc.content[1].text'),a.run('state.characters[0].name')+' · Олена');
+ assert.equal(a.run('exported.doc.content[3].text'),a.run('state.characters[1].name'));
 });
