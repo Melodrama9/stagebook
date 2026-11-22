@@ -208,6 +208,19 @@ function render(){
  const views={script:renderScript,story:renderStory,characters:()=>renderCharacters(id),props:renderProps};$('#content').innerHTML=(views[tab]||renderScript)();
  $('#search')?.addEventListener('input',e=>{const q=e.target.value.toLocaleLowerCase('uk');document.querySelectorAll('.character-card').forEach(c=>c.hidden=!c.dataset.search.includes(q));$('#no-results').hidden=[...document.querySelectorAll('.character-card')].some(c=>!c.hidden);});
  if(editor&&tab==='script')bindScriptEditor();
+ const timelinePdf=$('#download-timeline');
+ if(timelinePdf)timelinePdf.onclick=async()=>{
+  const character=tab==='characters'?state.characters.find(c=>c.id===id):null;
+  const title=character?character.name:'Основна історія';
+  const content=[{text:title,fontSize:20,bold:true}];
+  if(character)content.push(character.actor||'',character.bio||'');
+  for(const [i,p] of state.points.entries()){
+   content.push({text:number(i)+' · '+p.title,bold:true,margin:[0,12,0,4]},character?character.notes[p.id]||'—':p.text||'');
+  }
+  timelinePdf.disabled=true;
+  try{await exportPdf(title,content);}catch(error){notify(error.message);}finally{timelinePdf.disabled=false;}
+ };
+ bindTimelineDrag();
  const download=$('#download-scenario');
  if(download)download.onclick=()=>downloadScenario(download);
  const scenarios=$('#scenario-select');
@@ -310,9 +323,7 @@ async function downloadScenario(button) {
    }
    content.push({text:line.text,bold:line.type==='heading',italics:line.type==='direction',margin:[0,2,0,9]});
   }
-  if(!pdfAssets)pdfAssets=loadPdfAsset('pdfmake.min.js').then(()=>loadPdfAsset('vfs_fonts.js')).catch(e=>{pdfAssets=null;throw e;});
-  await pdfAssets;
-  window.pdfMake.createPdf({info:{title},content,pageSize:'A4',pageBreakBefore:(node,following)=>node.headlineLevel===1&&!following.length}).download(title.replace(/[\\/:*?"<>|]/g,'_')+'.pdf');
+  await exportPdf(title,content);
  }catch(e){notify(e.message);}
  finally{button.disabled=false;}
 }
@@ -341,10 +352,44 @@ async function saveScriptLine(id,afterId,data){
  await mutate(s=>{s.script??=[];if(id)Object.assign(s.script.find(l=>l.id===id),entry);else{const at=afterId?s.script.findIndex(l=>l.id===afterId)+1:s.script.length;s.script.splice(at,0,{id:uid(),...entry});}});
 }
 
-function renderStory(){return `<div class="section-head"><div><h2>Основна історія</h2><p class="subtext">Послідовність подій та фокус уваги глядача.</p></div><div class="toolbar"><span class="count">${state.points.length} точок уваги</span>${editor?action('add-point','+ Додати точку',''):''}</div></div><div class="story-layout"><aside class="outline"><p class="tiny-heading">ЛІНІЯ ВИСТАВИ</p>${state.points.map((p,i)=>`<a href="#point-${esc(p.id)}" data-scroll="point-${esc(p.id)}"><span>${number(i)}</span>${esc(p.title)}</a>`).join('')}<p class="outline-note">Кожна точка поєднує основну історію з діями всіх 36 персонажів.</p></aside><div>${state.points.map((p,i)=>`<article class="point" id="point-${esc(p.id)}"><div class="point-top"><span class="point-no">${number(i)}</span><span class="point-tag">ТОЧКА УВАГИ</span></div><h3>${esc(p.title)}</h3><p>${esc(p.text)}</p>${pointActions(p,i)}</article>`).join('')||'<div class="empty">Додайте першу точку уваги для вашої вистави.</div>'}</div></div>`;}
+async function exportPdf(title,content){
+  if(!pdfAssets)pdfAssets=loadPdfAsset('pdfmake.min.js').then(()=>loadPdfAsset('vfs_fonts.js')).catch(e=>{pdfAssets=null;throw e;});
+  await pdfAssets;
+  window.pdfMake.createPdf({info:{title},content,pageSize:'A4',pageBreakBefore:(node,following)=>node.headlineLevel===1&&!following.length}).download(title.replace(/[\\/:*?"<>|]/g,'_')+'.pdf');
+}
+function bindTimelineDrag(){
+ const outline=$('.outline');
+ if(!outline||!editor)return;
+ let source;
+ outline.ondragstart=e=>{
+  source=e.target.closest('[data-point]')?.dataset.point;
+  if(source){e.dataTransfer.setData('text/plain',source);e.dataTransfer.effectAllowed='move';}
+ };
+ outline.ondragover=e=>{
+  if(!source)return;
+  e.preventDefault();
+  const row=e.target.closest('[data-point]');
+  outline.querySelector('.drop-target')?.classList.remove('drop-target');
+  row?.classList.add('drop-target');
+ };
+ outline.ondragend=()=>{source=null;outline.querySelector('.drop-target')?.classList.remove('drop-target');};
+ outline.ondrop=e=>{
+  if(!source)return;
+  e.preventDefault();
+  const target=e.target.closest('[data-point]')?.dataset.point;
+  if(!target||source===target)return;
+  const moved=source;
+  mutate(play=>{
+   const from=play.points.findIndex(p=>p.id===moved),to=play.points.findIndex(p=>p.id===target);
+   if(from>=0&&to>=0)play.points.splice(to,0,play.points.splice(from,1)[0]);
+  }).catch(error=>notify(error.message));
+ };
+}
+function renderTimeline(){return `<aside class="outline"><p class="tiny-heading">ЛІНІЯ ВИСТАВИ</p>${state.points.map((p,i)=>`<a ${editor?'draggable="true"':'draggable="false"'} data-point="${esc(p.id)}" href="#point-${esc(p.id)}" data-scroll="point-${esc(p.id)}"><span>${number(i)}</span>${esc(p.title)}</a>`).join('')}<p class="outline-note">Кожна точка поєднує основну історію з діями всіх 36 персонажів.</p></aside>`;}
+function renderStory(){return `<div class="section-head"><div><h2>Основна історія</h2><p class="subtext">Послідовність подій та фокус уваги глядача.</p></div><div class="toolbar"><button class="quiet" id="download-timeline">Завантажити PDF</button><span class="count">${state.points.length} точок уваги</span>${editor?action('add-point','+ Додати точку',''):''}</div></div><div class="story-layout">${renderTimeline()}<div>${state.points.map((p,i)=>`<article class="point" id="point-${esc(p.id)}"><div class="point-top"><span class="point-no">${number(i)}</span><span class="point-tag">ТОЧКА УВАГИ</span></div><h3>${esc(p.title)}</h3><p>${esc(p.text)}</p>${pointActions(p,i)}</article>`).join('')||'<div class="empty">Додайте першу точку уваги для вашої вистави.</div>'}</div></div>`;}
 function renderCharacters(id){
  const c=state.characters.find(c=>c.id===id);
- if(c)return `<a class="back" href="#characters">← Усі персонажі</a><div class="section-head"><div><h2>Лінія персонажа</h2><p class="subtext">Особиста історія у спільному ритмі вистави.</p></div><select id="character-select" class="character-select" aria-label="Обрати персонажа">${state.characters.map(x=>`<option style="color:${characterColor(x)};background:#fffefa;font-weight:600" value="${esc(x.id)}" ${x.id===id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></div><div class="character-layout"><aside class="profile">${avatar(c)}<h2><span class="color-dot" style="background:${characterColor(c)}"></span>${esc(c.name)}</h2><p>${esc(c.actor||'Ім’я актора ще не додано')}</p><p>${esc(c.bio||'Тут з’явиться інформація про персонажа: його характер, мотивація та зв’язки.')}</p>${editor?`<div class="actions">${action('edit-character','Редагувати профіль',c.id)}</div>`:''}</aside><div>${state.points.map((p,i)=>`<article class="point"><div class="point-top"><span class="point-no">${number(i)}</span><span class="point-tag">${esc(p.title)}</span></div><p>${esc(c.notes[p.id]||'Дії персонажа в цій точці ще не описані.')}</p>${editor?`<div class="actions">${action('edit-note','Редагувати дії',`${c.id}/${p.id}`)}</div>`:''}</article>`).join('')||'<div class="empty">Спочатку додайте точки в основній історії.</div>'}</div></div>`;
+ if(c)return `<a class="back" href="#characters">← Усі персонажі</a><div class="section-head"><div><h2>Лінія персонажа</h2><p class="subtext">Особиста історія у спільному ритмі вистави.</p></div><button class="quiet" id="download-timeline">Завантажити PDF</button><select id="character-select" class="character-select" aria-label="Обрати персонажа">${state.characters.map(x=>`<option style="color:${characterColor(x)};background:#fffefa;font-weight:600" value="${esc(x.id)}" ${x.id===id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></div><div class="character-layout"><div><aside class="profile">${avatar(c)}<h2><span class="color-dot" style="background:${characterColor(c)}"></span>${esc(c.name)}</h2><p>${esc(c.actor||'Ім’я актора ще не додано')}</p><p>${esc(c.bio||'Тут з’явиться інформація про персонажа: його характер, мотивація та зв’язки.')}</p>${editor?`<div class="actions">${action('edit-character','Редагувати профіль',c.id)}</div>`:''}</aside>${renderTimeline()}</div><div>${state.points.map((p,i)=>`<article class="point" id="point-${esc(p.id)}"><div class="point-top"><span class="point-no">${number(i)}</span><span class="point-tag">${esc(p.title)}</span></div><p>${esc(c.notes[p.id]||'Дії персонажа в цій точці ще не описані.')}</p>${editor?`<div class="actions">${action('edit-note','Редагувати дії',`${c.id}/${p.id}`)}</div>`:''}</article>`).join('')||'<div class="empty">Спочатку додайте точки в основній історії.</div>'}</div></div>`;
  return `<div class="section-head"><div><h2>36 персонажів</h2><p class="subtext">Оберіть персонажа, щоб побачити його історію.</p></div><input class="search" id="search" type="search" placeholder="Пошук персонажа чи актора…" aria-label="Пошук персонажа чи актора"></div><div class="character-grid">${state.characters.map((c,i)=>`<a class="character-card" href="#characters/${esc(c.id)}" data-search="${esc((c.name+' '+c.actor).toLocaleLowerCase('uk'))}">${avatar(c)}<h3><span class="color-dot" style="background:${characterColor(c)}"></span>${esc(c.name)}</h3><small>${esc(c.actor||`Учасник ${number(i)}`)}</small></a>`).join('')}</div><p class="empty" id="no-results" hidden>Персонажів не знайдено.</p>`;
 }
 function renderProps(){const done=state.props.filter(p=>p.done).length;return `<div class="section-head"><div><h2>Список реквізиту</h2><p class="subtext">Усе, що має бути готове до виходу на сцену.</p></div>${editor?action('add-prop','+ Додати реквізит',''):'<span class="count">Лише перегляд</span>'}</div><div class="props-summary"><p class="tiny-heading">ГОТОВО ${done} ІЗ ${state.props.length}</p><div class="progress" aria-label="Готовність реквізиту"><i style="width:${state.props.length?done/state.props.length*100:0}%"></i></div></div>${state.props.length?`<div class="props-list">${state.props.map(p=>`<div class="prop-row ${p.done?'done':''}"><input type="checkbox" aria-label="${esc(p.name)} — готово" data-check="${esc(p.id)}" ${p.done?'checked':''} ${editor?'':'disabled'}><div class="prop-info"><strong>${esc(p.name)}</strong><p>${esc(p.note)}</p></div>${editor?`<div class="actions">${action('edit-prop','Змінити',p.id)}${action('delete-prop','×',p.id,'quiet danger')}</div>`:''}</div>`).join('')}</div>`:'<div class="empty"><h3>Місце для важливих деталей</h3><p>Реквізит ще не додано. Тут буде список речей та їхня готовність.</p></div>'}`;}

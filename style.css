@@ -25,3 +25,4 @@
   max-width: 100%;
   min-width: min(14rem, 100%);
 }
+.outline [draggable=true]{cursor:grab}.outline .drop-target{outline:2px solid var(--wine)}.character-layout .outline{margin-top:20px}

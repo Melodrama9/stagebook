@@ -158,3 +158,21 @@ test('outdated editor saves fetch the latest revision and keep unrelated actor e
  assert.equal(a.run('posted.new_data.characters[0].bio'),'Bio');
  assert.equal(a.run('revision'),9);
 });
+
+test('timeline drag moves a shared point and both PDF buttons export the displayed order',async()=>{
+ const a=app();
+ a.run('editor=true;api=async()=>1;exportPdf=async(title,content)=>{globalThis.pdf={title,content}};state.characters[0].notes.p1="Особиста дія";render()');
+ const outline=a.nodes.get('.outline');
+ const row=id=>({closest:()=>({dataset:{point:id}})});
+ outline.ondragstart({target:row('p1'),dataTransfer:{setData(){}}});
+ outline.ondrop({preventDefault(){},target:row('p2')});
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(a.run('state.points[1].id'),'p1');
+ await a.nodes.get('#download-timeline').onclick();
+ assert.equal(a.run('pdf.title'),'Основна історія');
+ a.run('editor=false;location.hash="#characters/c1";render()');
+ assert.match(a.nodes.get('#content').innerHTML,/data-scroll="point-p1"/);
+ await a.nodes.get('#download-timeline').onclick();
+ assert.equal(a.run('pdf.title'),a.run('state.characters[0].name'));
+ assert.ok(a.run('pdf.content.includes("Особиста дія")'));
+});
