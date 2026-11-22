@@ -64,7 +64,18 @@ const initial = {
   props:[]
 };
 function notify(message){$('#toast').textContent=message;$('#toast').style.display='block';clearTimeout(timer);timer=setTimeout(()=>$('#toast').style.display='none',4200);}
+let characterEditor=false;
+function canEditCharacters(){return editor || Boolean(session && characterEditor);}
+async function identifyEditor(){
+ const admins=await api('/rest/v1/editors?select=user_id');
+ editor=admins.some(a=>a.user_id===session.user.id);
+ if(!editor){
+  const roles=await api('/rest/v1/character_editors?select=user_id');
+  characterEditor=roles.some(a=>a.user_id===session.user.id);
+ }
+}
 function storeSession(value) {
+ if(!value||value.user?.id!==session?.user?.id)characterEditor=false;
  session=value;
  if(session)session.expires_at??=Math.floor(Date.now()/1000)+(session.expires_in||3600);
  try {
@@ -94,8 +105,7 @@ async function start() {
   if(session){
    try{
     await refreshSession();
-    const admins=await api('/rest/v1/editors?select=user_id');
-    editor=admins.some(a=>a.user_id===session?.user.id);
+    await identifyEditor();
    }catch{editor=false;}
   }
  }
@@ -114,14 +124,14 @@ function validatePhoto(file){
  if(!file.size || file.size>5*1024*1024)throw new Error('Фото має бути непорожнім і не перевищувати 5 МБ.');
 }
 async function uploadPhoto(file,characterId){
- if(!editor||!session)throw new Error('Увійдіть як редактор, щоб завантажити фото.');
+ if(!canEditCharacters()||!session)throw new Error('Увійдіть як редактор, щоб завантажити фото.');
  validatePhoto(file);
  const path=`${characterId}/${uid()}.${photoTypes[file.type]}`;
  await api(`/storage/v1/object/character-photos/${path}`,{method:'POST',body:file,headers:{'Content-Type':file.type,'Cache-Control':'max-age=31536000','x-upsert':'false'}});
  return `${config.supabaseUrl.replace(/\/$/,'')}/storage/v1/object/public/character-photos/${path}`;
 }
 async function saveCharacter(id,data){
- if(!editor)throw new Error('Увійдіть як редактор, щоб зберегти зміни.');
+ if(!canEditCharacters())throw new Error('Увійдіть як редактор, щоб зберегти зміни.');
  const {name,actor,bio,photoFile,removePhoto}=data;
  if(!name.trim())throw new Error('Вкажіть ім’я.');
  const current=state.characters.find(c=>c.id===id);
@@ -177,13 +187,15 @@ function mergeSavedChanges(base,edited,latest){
  return edited;
 }
 async function mutate(change){
- if(!editor||saving)throw new Error('Увійдіть як редактор, щоб зберегти зміни.');
+ if(!canEditCharacters()||saving)throw new Error('Увійдіть як редактор, щоб зберегти зміни.');
  const next=structuredClone(state);change(next);saving=true;
  try{
   let expected=revision, candidate=next;
   while(true){
    try{
-    revision=await api('/rest/v1/rpc/save_play',{method:'POST',body:JSON.stringify({expected_revision:expected,new_data:candidate})});
+    const endpoint=editor?'save_play':'save_characters';
+    const payload=editor?{new_data:candidate}:{characters:candidate.characters};
+    revision=await api('/rest/v1/rpc/'+endpoint,{method:'POST',body:JSON.stringify({expected_revision:expected,...payload})});
     state=candidate;render();notify('Зміни збережено для всіх учасників');break;
    }catch(error){
     if(error.status!==409)throw error;
@@ -202,7 +214,7 @@ function render(){
  if(!state)return;
  const [tab,id]=(location.hash.slice(1)||'script').split('/');
  document.querySelectorAll('nav a').forEach(a=>{a.classList.toggle('active',a.dataset.tab===tab);if(a.dataset.tab===tab)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});
- $('#mode-label').textContent=editor?'Режим редактора':'Режим перегляду';$('#login').textContent=editor?'Вийти з акаунта':'↗ Вхід для редактора';
+ $('#mode-label').textContent=editor?'Режим редактора':canEditCharacters()?'Редактор персонажів':'Режим перегляду';$('#login').textContent=canEditCharacters()?'Вийти з акаунта':'↗ Вхід для редактора';
  $('#notice').textContent=connected?'':'Демонстраційний вміст · Підключіть Supabase, щоб зберігати зміни та відкрити вхід редактора.';
  $('#footer-status').textContent=connected?`Спільна версія · ${revision}`:'Демонстраційний простір';
  const views={script:renderScript,story:renderStory,characters:()=>renderCharacters(id),props:renderProps};$('#content').innerHTML=(views[tab]||renderScript)();
@@ -389,7 +401,7 @@ function renderTimeline(){return `<aside class="outline"><p class="tiny-heading"
 function renderStory(){return `<div class="section-head"><div><h2>Основна історія</h2><p class="subtext">Послідовність подій та фокус уваги глядача.</p></div><div class="toolbar"><button class="quiet" id="download-timeline">Завантажити PDF</button><span class="count">${state.points.length} точок уваги</span>${editor?action('add-point','+ Додати точку',''):''}</div></div><div class="story-layout">${renderTimeline()}<div>${state.points.map((p,i)=>`<article class="point" id="point-${esc(p.id)}"><div class="point-top"><span class="point-no">${number(i)}</span><span class="point-tag">ТОЧКА УВАГИ</span></div><h3>${esc(p.title)}</h3><p>${esc(p.text)}</p>${pointActions(p,i)}</article>`).join('')||'<div class="empty">Додайте першу точку уваги для вашої вистави.</div>'}</div></div>`;}
 function renderCharacters(id){
  const c=state.characters.find(c=>c.id===id);
- if(c)return `<a class="back" href="#characters">← Усі персонажі</a><div class="section-head"><div><h2>Лінія персонажа</h2><p class="subtext">Особиста історія у спільному ритмі вистави.</p></div><button class="quiet" id="download-timeline">Завантажити PDF</button><select id="character-select" class="character-select" aria-label="Обрати персонажа">${state.characters.map(x=>`<option style="color:${characterColor(x)};background:#fffefa;font-weight:600" value="${esc(x.id)}" ${x.id===id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></div><div class="character-layout"><div><aside class="profile">${avatar(c)}<h2><span class="color-dot" style="background:${characterColor(c)}"></span>${esc(c.name)}</h2><p>${esc(c.actor||'Ім’я актора ще не додано')}</p><p>${esc(c.bio||'Тут з’явиться інформація про персонажа: його характер, мотивація та зв’язки.')}</p>${editor?`<div class="actions">${action('edit-character','Редагувати профіль',c.id)}</div>`:''}</aside>${renderTimeline()}</div><div>${state.points.map((p,i)=>`<article class="point" id="point-${esc(p.id)}"><div class="point-top"><span class="point-no">${number(i)}</span><span class="point-tag">${esc(p.title)}</span></div><p>${esc(c.notes[p.id]||'Дії персонажа в цій точці ще не описані.')}</p>${editor?`<div class="actions">${action('edit-note','Редагувати дії',`${c.id}/${p.id}`)}</div>`:''}</article>`).join('')||'<div class="empty">Спочатку додайте точки в основній історії.</div>'}</div></div>`;
+ if(c)return `<a class="back" href="#characters">← Усі персонажі</a><div class="section-head"><div><h2>Лінія персонажа</h2><p class="subtext">Особиста історія у спільному ритмі вистави.</p></div><button class="quiet" id="download-timeline">Завантажити PDF</button><select id="character-select" class="character-select" aria-label="Обрати персонажа">${state.characters.map(x=>`<option style="color:${characterColor(x)};background:#fffefa;font-weight:600" value="${esc(x.id)}" ${x.id===id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></div><div class="character-layout"><div><aside class="profile">${avatar(c)}<h2><span class="color-dot" style="background:${characterColor(c)}"></span>${esc(c.name)}</h2><p>${esc(c.actor||'Ім’я актора ще не додано')}</p><p>${esc(c.bio||'Тут з’явиться інформація про персонажа: його характер, мотивація та зв’язки.')}</p>${canEditCharacters()?`<div class="actions">${action('edit-character','Редагувати профіль',c.id)}</div>`:''}</aside>${renderTimeline()}</div><div>${state.points.map((p,i)=>`<article class="point" id="point-${esc(p.id)}"><div class="point-top"><span class="point-no">${number(i)}</span><span class="point-tag">${esc(p.title)}</span></div><p>${esc(c.notes[p.id]||'Дії персонажа в цій точці ще не описані.')}</p>${canEditCharacters()?`<div class="actions">${action('edit-note','Редагувати дії',`${c.id}/${p.id}`)}</div>`:''}</article>`).join('')||'<div class="empty">Спочатку додайте точки в основній історії.</div>'}</div></div>`;
  return `<div class="section-head"><div><h2>36 персонажів</h2><p class="subtext">Оберіть персонажа, щоб побачити його історію.</p></div><input class="search" id="search" type="search" placeholder="Пошук персонажа чи актора…" aria-label="Пошук персонажа чи актора"></div><div class="character-grid">${state.characters.map((c,i)=>`<a class="character-card" href="#characters/${esc(c.id)}" data-search="${esc((c.name+' '+c.actor).toLocaleLowerCase('uk'))}">${avatar(c)}<h3><span class="color-dot" style="background:${characterColor(c)}"></span>${esc(c.name)}</h3><small>${esc(c.actor||`Учасник ${number(i)}`)}</small></a>`).join('')}</div><p class="empty" id="no-results" hidden>Персонажів не знайдено.</p>`;
 }
 function renderProps(){const done=state.props.filter(p=>p.done).length;return `<div class="section-head"><div><h2>Список реквізиту</h2><p class="subtext">Усе, що має бути готове до виходу на сцену.</p></div>${editor?action('add-prop','+ Додати реквізит',''):'<span class="count">Лише перегляд</span>'}</div><div class="props-summary"><p class="tiny-heading">ГОТОВО ${done} ІЗ ${state.props.length}</p><div class="progress" aria-label="Готовність реквізиту"><i style="width:${state.props.length?done/state.props.length*100:0}%"></i></div></div>${state.props.length?`<div class="props-list">${state.props.map(p=>`<div class="prop-row ${p.done?'done':''}"><input type="checkbox" aria-label="${esc(p.name)} — готово" data-check="${esc(p.id)}" ${p.done?'checked':''} ${editor?'':'disabled'}><div class="prop-info"><strong>${esc(p.name)}</strong><p>${esc(p.note)}</p></div>${editor?`<div class="actions">${action('edit-prop','Змінити',p.id)}${action('delete-prop','×',p.id,'quiet danger')}</div>`:''}</div>`).join('')}</div>`:'<div class="empty"><h3>Місце для важливих деталей</h3><p>Реквізит ще не додано. Тут буде список речей та їхня готовність.</p></div>'}`;}
@@ -401,16 +413,16 @@ function modal(title,body,submit,label='Зберегти'){
 $('#close-modal').onclick=$('#cancel-modal').onclick=()=>{if(!saving&&!submitting)$('#modal').close();};
 $('#modal').addEventListener('cancel',e=>{if(submitting||saving)e.preventDefault();});
 $('#login').onclick=async()=>{
- if(editor){try{await api('/auth/v1/logout?scope=local',{method:'POST'});}catch{}storeSession(null);editor=false;render();return;}
+ if(canEditCharacters()){try{await api('/auth/v1/logout?scope=local',{method:'POST'});}catch{}storeSession(null);editor=false;render();return;}
  if(!connected){modal('Вхід ще не підключено','<p>Для входу редактора потрібно підключити Supabase та призначити один акаунт редактором. Інструкція є у файлі README репозиторію.</p>',async()=>{},'Зрозуміло');return;}
  modal('Вхід для редактора','<p class="subtext">Гості можуть переглядати виставу без входу.</p>'+field('Електронна пошта','email','','','email')+field('Пароль','password','','','password'),async data=>{
  storeSession(await api('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify(data)}));
- try{const admins=await api('/rest/v1/editors?select=user_id');if(!admins.some(a=>a.user_id===session.user.id))throw new Error('Цей акаунт не має права редагувати виставу.');editor=true;await load();notify('Ви увійшли як редактор');}catch(e){storeSession(null);editor=false;throw e;}
+ try{await identifyEditor();if(!canEditCharacters())throw new Error('Цей акаунт не має права редагувати виставу.');await load();notify('Ви увійшли як редактор');}catch(e){storeSession(null);editor=false;throw e;}
  },'Увійти');
 };
 $('#content').addEventListener('click',e=>{
  const link=e.target.closest('[data-scroll]');if(link){e.preventDefault();document.getElementById(link.dataset.scroll)?.scrollIntoView({behavior:'smooth'});return;}
- const b=e.target.closest('[data-action]');if(!b||!editor)return;const {action:a,id}=b.dataset,p=state.points.find(p=>p.id===id),c=state.characters.find(c=>c.id===id),prop=state.props.find(p=>p.id===id);
+ const b=e.target.closest('[data-action]');if(!b||(!editor&&!(canEditCharacters()&&['edit-character','edit-note'].includes(b.dataset.action))))return;const {action:a,id}=b.dataset,p=state.points.find(p=>p.id===id),c=state.characters.find(c=>c.id===id),prop=state.props.find(p=>p.id===id);
  if(a==='new-scenario')modal('Новий сценарій',field('Назва сценарію','title'),data=>createScenario(data.title),'Створити');
  if(a==='rename-scenario')modal('Перейменувати сценарій',field('Назва сценарію','title',scenarioTitle(state,id)),data=>renameScenario(id,data.title));
  if(['add-script','edit-script','insert-script'].includes(a)){
