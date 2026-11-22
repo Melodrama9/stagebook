@@ -142,10 +142,57 @@ async function load(){
  try{const rows=await api('/rest/v1/play?id=eq.1&select=data,revision');if(!rows.length)throw new Error('Виставу ще не створено. Виконайте SQL-налаштування.');state=rows[0].data;revision=rows[0].revision;render();}
  catch(e){$('#content').innerHTML=`<div class="empty">${esc(e.message)}<p><button class="quiet" id="retry">Спробувати знову</button></p></div>`;$('#retry').onclick=load;}
 }
+function mergeSavedChanges(base,edited,latest){
+ const equal=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+ if(equal(base,edited))return latest;
+ if(equal(base,latest))return edited;
+ if(Array.isArray(base)&&Array.isArray(edited)&&Array.isArray(latest)){
+  if(![...base,...edited,...latest].every(item=>item?.id))return edited;
+  const index=list=>new Map(list.map(item=>[item.id,item]));
+  const before=index(base),local=index(edited),remote=index(latest);
+  const retained=list=>list.filter(item=>before.has(item.id)&&local.has(item.id)).map(item=>item.id);
+  const reordered=!equal(retained(base),retained(edited));
+  const ids=(reordered?edited:latest).map(item=>item.id);
+  for(const list of [edited,latest]){
+   let previous;
+   for(const {id} of list){
+    if(!ids.includes(id))ids.splice(previous===undefined?0:ids.indexOf(previous)+1,0,id);
+    previous=id;
+   }
+  }
+  return ids.filter(id=>!before.has(id)||(local.has(id)&&remote.has(id))).map(id=>mergeSavedChanges(before.get(id),local.get(id),remote.get(id)));
+ }
+ if(base&&edited&&latest&&typeof base==='object'&&typeof edited==='object'&&typeof latest==='object'){
+  const result={...latest};
+  for(const key of new Set([...Object.keys(base),...Object.keys(edited)])){
+   if(!(key in edited))delete result[key];
+   else if(!equal(base[key],edited[key])){
+    // The editor saves a scenario's complete text and regenerates its line IDs.
+    if(key==='script')result[key]=edited[key];
+    else result[key]=mergeSavedChanges(base[key]??(Array.isArray(edited[key])?[]:undefined),edited[key],latest[key]);
+   }
+  }
+  return result;
+ }
+ return edited;
+}
 async function mutate(change){
  if(!editor||saving)throw new Error('Увійдіть як редактор, щоб зберегти зміни.');
  const next=structuredClone(state);change(next);saving=true;
- try{const result=await api('/rest/v1/rpc/save_play',{method:'POST',body:JSON.stringify({expected_revision:revision,new_data:next})});state=next;revision=result;render();notify('Зміни збережено для всіх учасників');}finally{saving=false;}
+ try{
+  let expected=revision, candidate=next;
+  while(true){
+   try{
+    revision=await api('/rest/v1/rpc/save_play',{method:'POST',body:JSON.stringify({expected_revision:expected,new_data:candidate})});
+    state=candidate;render();notify('Зміни збережено для всіх учасників');break;
+   }catch(error){
+    if(error.status!==409)throw error;
+    const [latest]=await api('/rest/v1/play?id=eq.1&select=data,revision');
+    candidate=mergeSavedChanges(state,next,latest.data);
+    expected=latest.revision;
+   }
+  }
+ }finally{saving=false;}
 }
 const avatar=c=>`<div class="avatar">${c.photo?`<img src="${esc(c.photo)}" alt="${esc(c.name)}" loading="lazy">`:portrait}</div>`;
 const number=i=>String(i+1).padStart(2,'0');

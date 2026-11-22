@@ -149,3 +149,12 @@ test('signing out revokes only the current session',async()=>{
  assert.equal(a.run('logoutPath'),'/auth/v1/logout?scope=local');
  assert.equal(a.run('session'),null);
 });
+
+test('outdated editor saves fetch the latest revision and keep unrelated actor edits',async()=>{
+ const a=app();
+ a.run('editor=true;const latest=structuredClone(state);latest.characters[0].actor="Actor";let posted;api=async(path,options)=>{if(!options)return [{data:latest,revision:8}];posted=JSON.parse(options.body);if(posted.expected_revision!==8)throw Object.assign(Error("conflict"),{status:409});return 9}');
+ await a.run('mutate(s=>s.characters[0].bio="Bio")');
+ assert.equal(a.run('posted.new_data.characters[0].actor'),'Actor');
+ assert.equal(a.run('posted.new_data.characters[0].bio'),'Bio');
+ assert.equal(a.run('revision'),9);
+});
