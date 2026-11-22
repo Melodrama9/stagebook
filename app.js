@@ -64,9 +64,47 @@ const initial = {
   props:[]
 };
 function notify(message){$('#toast').textContent=message;$('#toast').style.display='block';clearTimeout(timer);timer=setTimeout(()=>$('#toast').style.display='none',4200);}
+function storeSession(value) {
+ session=value;
+ if(session)session.expires_at??=Math.floor(Date.now()/1000)+(session.expires_in||3600);
+ try {
+  if(session)window.sessionStorage.setItem('stagebook-session',JSON.stringify(session));
+  else window.sessionStorage.removeItem('stagebook-session');
+ }catch{}
+}
+let refreshing;
+async function refreshSession() {
+ if(!session || session.expires_at*1000-Date.now()>120000)return;
+ if(refreshing)return refreshing;
+ refreshing=(async()=>{
+  const previous=session;
+  try {
+   const value=await api('/auth/v1/token?grant_type=refresh_token',{method:'POST',body:JSON.stringify({refresh_token:previous.refresh_token})});
+   if(session===previous)storeSession(value);
+  }catch(e){
+   if(e.status===400||e.status===401){storeSession(null);editor=false;render();}
+   throw e;
+  }
+ })();
+ try{await refreshing;}finally{refreshing=null;}
+}
+async function start() {
+ if(connected){
+  try{session=JSON.parse(window.sessionStorage.getItem('stagebook-session'));}catch{}
+  if(session){
+   try{
+    await refreshSession();
+    const admins=await api('/rest/v1/editors?select=user_id');
+    editor=admins.some(a=>a.user_id===session?.user.id);
+   }catch{editor=false;}
+  }
+ }
+ await load();
+}
 async function api(path, options={}){
+ if(session&&!path.startsWith('/auth/v1/'))await refreshSession();
  const res=await fetch(config.supabaseUrl.replace(/\/$/,'')+path,{...options,headers:{apikey:config.supabaseAnonKey,Authorization:`Bearer ${session?.access_token || config.supabaseAnonKey}`,'Content-Type':'application/json',...options.headers}});
- if(!res.ok){if(res.status===401){editor=false;session=null;render();}throw new Error(res.status===401?'Сеанс завершено. Увійдіть знову.':res.status===403?'Немає дозволу на редагування.':res.status===409?'Дані вже змінилися в іншому вікні. Оновіть сторінку перед редагуванням.':'Не вдалося виконати запит. Перевірте з’єднання та налаштування.');}
+ if(!res.ok){if(res.status===401){editor=false;storeSession(null);render();}throw Object.assign(new Error(res.status===401?'Сеанс завершено. Увійдіть знову.':res.status===403?'Немає дозволу на редагування.':res.status===409?'Дані вже змінилися в іншому вікні. Оновіть сторінку перед редагуванням.':'Не вдалося виконати запит. Перевірте з’єднання та налаштування.'),{status:res.status});}
  return res.status===204?null:res.json();
 }
 
@@ -271,11 +309,11 @@ function modal(title,body,submit,label='Зберегти'){
 $('#close-modal').onclick=$('#cancel-modal').onclick=()=>{if(!saving&&!submitting)$('#modal').close();};
 $('#modal').addEventListener('cancel',e=>{if(submitting||saving)e.preventDefault();});
 $('#login').onclick=async()=>{
- if(editor){try{await api('/auth/v1/logout',{method:'POST'});}catch{}session=null;editor=false;render();return;}
+ if(editor){try{await api('/auth/v1/logout?scope=local',{method:'POST'});}catch{}storeSession(null);editor=false;render();return;}
  if(!connected){modal('Вхід ще не підключено','<p>Для входу редактора потрібно підключити Supabase та призначити один акаунт редактором. Інструкція є у файлі README репозиторію.</p>',async()=>{},'Зрозуміло');return;}
  modal('Вхід для редактора','<p class="subtext">Гості можуть переглядати виставу без входу.</p>'+field('Електронна пошта','email','','','email')+field('Пароль','password','','','password'),async data=>{
- session=await api('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify(data)});
- try{const admins=await api('/rest/v1/editors?select=user_id');if(!admins.some(a=>a.user_id===session.user.id))throw new Error('Цей акаунт не має права редагувати виставу.');editor=true;await load();notify('Ви увійшли як редактор');}catch(e){session=null;editor=false;throw e;}
+ storeSession(await api('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify(data)}));
+ try{const admins=await api('/rest/v1/editors?select=user_id');if(!admins.some(a=>a.user_id===session.user.id))throw new Error('Цей акаунт не має права редагувати виставу.');editor=true;await load();notify('Ви увійшли як редактор');}catch(e){storeSession(null);editor=false;throw e;}
  },'Увійти');
 };
 $('#content').addEventListener('click',e=>{
@@ -304,6 +342,6 @@ $('#content').addEventListener('error',e=>{if(e.target.tagName==='IMG')e.target.
 window.addEventListener('hashchange',render);
 window.addEventListener('beforeunload',e=>{if(saving||submitting||scriptDirty){e.preventDefault();e.returnValue='';}});
 $('#stage-dots').innerHTML='<i></i>'.repeat(36);
-// Refresh authenticated sessions in memory; no credentials are written to localStorage.
-setInterval(async()=>{if(!session)return;if(session.expires_at*1000-Date.now()<120000){try{session=await api('/auth/v1/token?grant_type=refresh_token',{method:'POST',body:JSON.stringify({refresh_token:session.refresh_token})});}catch{session=null;editor=false;render();notify('Увійдіть повторно, щоб редагувати.');}}},30000);
-load();
+// Refresh each device's session independently. Transient network failures remain retryable.
+setInterval(()=>refreshSession().catch(()=>{}),30000);
+start();

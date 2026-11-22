@@ -129,3 +129,23 @@ test('PDF button exports the selected scenario when clicked',async()=>{
  assert.equal(a.run('exported.doc.content[1].text'),a.run('state.characters[0].name')+' · Олена');
  assert.equal(a.run('exported.doc.content[3].text'),a.run('state.characters[1].name'));
 });
+
+test('session refresh is shared by concurrent requests and retains session after network failure',async()=>{
+ const a=app();
+ a.run('storeSession({access_token:"old",refresh_token:"refresh",expires_in:3600});');
+ assert.ok(a.run('session.expires_at*1000>Date.now()'));
+ a.run('session.expires_at=0;let calls=0;api=async()=>{calls++;return {access_token:"new",refresh_token:"next",expires_in:3600}}');
+ await Promise.all([a.run('refreshSession()'),a.run('refreshSession()')]);
+ assert.equal(a.run('calls'),1);
+ assert.equal(a.run('session.access_token'),'new');
+ a.run('session.expires_at=0;api=async()=>{throw Error("offline")}');
+ await assert.rejects(a.run('refreshSession()'),/offline/);
+ assert.equal(a.run('session.access_token'),'new');
+});
+test('signing out revokes only the current session',async()=>{
+ const a=app();
+ a.run('editor=true;storeSession({access_token:"test",expires_in:3600});let logoutPath;api=async path=>{logoutPath=path}');
+ await a.nodes.get('#login').onclick();
+ assert.equal(a.run('logoutPath'),'/auth/v1/logout?scope=local');
+ assert.equal(a.run('session'),null);
+});
